@@ -1,97 +1,74 @@
 import os
+
 from ament_index_python.packages import get_package_share_directory
+
+
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, ExecuteProcess, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, Command
+from launch.substitutions import LaunchConfiguration
+
 from launch_ros.actions import Node
-from launch.actions import TimerAction
+
+
 
 def generate_launch_description():
-    # Define package name
-    package_name = 'clearo'
-    print(f"[DEBUG] Package Name: {package_name}")
 
-        # Include the robot state publisher
-    rsp_launch = IncludeLaunchDescription(
+
+    # Include the robot_state_publisher launch file, provided by our own package. Force sim time to be enabled
+    # !!! MAKE SURE YOU SET THE PACKAGE NAME CORRECTLY !!!
+
+    package_name='clearo' #<--- CHANGE ME
+
+    rsp = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
                     get_package_share_directory(package_name),'launch','rsp.launch.py'
                 )]), launch_arguments={'use_sim_time': 'true', 'use_ros2_control': 'true'}.items()
     )
 
-    print("[DEBUG] Included rsp.launch.py")
+    # joystick = IncludeLaunchDescription(
+    #             PythonLaunchDescriptionSource([os.path.join(
+    #                 get_package_share_directory(package_name),'launch','joystick.launch.py'
+    #             )]), launch_arguments={'use_sim_time': 'true'}.items()
+    # )
 
-    # Get package directory
-    pkg_path = os.path.join(get_package_share_directory(package_name))
-    print(f"[DEBUG] Package Path: {pkg_path}")
+    # twist_mux_params = os.path.join(get_package_share_directory(package_name),'config','twist_mux.yaml')
+    # twist_mux = Node(
+    #         package="twist_mux",
+    #         executable="twist_mux",
+    #         parameters=[twist_mux_params, {'use_sim_time': True}],
+    #         remappings=[('/cmd_vel_out','/diff_cont/cmd_vel_unstamped')]
+    #     )
 
-    # Default world path
-    # default_world_path = os.path.join(pkg_path, 'worlds', 'empty.world')
-    # print(f"[DEBUG] Default World Path: {default_world_path}")
 
-    # Launch arguments
-    use_sim_time = LaunchConfiguration('use_sim_time', default='true')
     default_world = os.path.join(
-            get_package_share_directory(package_name),
-            'worlds',
-            'empty.world'
-            )    
-        
+        get_package_share_directory(package_name),
+        'worlds',
+        'empty.world'
+        )    
+    
     world = LaunchConfiguration('world')
 
-    
-    # Declare launch arguments
     world_arg = DeclareLaunchArgument(
         'world',
         default_value=default_world,
-        description='Path to the world file'
-    )
-    print("[DEBUG] Declared world launch argument")
+        description='World to load'
+        )
 
-    use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time',
-        default_value='true',
-        description='Use simulation time'
-    )
-    print("[DEBUG] Declared use_sim_time launch argument")
+    # Include the Gazebo launch file, provided by the ros_gz_sim package
+    gazebo = IncludeLaunchDescription(
+                PythonLaunchDescriptionSource([os.path.join(
+                    get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
+                    launch_arguments={'gz_args': ['-r -v4 ', world], 'on_exit_shutdown': 'true'}.items()
+             )
 
-    # Launch Gazebo with the specified world
-    gazebo_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([os.path.join(
-            get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
-                launch_arguments={'gz_args': '-r -v4', 'on_exit_shutdown': 'true'}.items()
+    # Run the spawner node from the ros_gz_sim package. The entity name doesn't really matter if you only have a single robot.
+    spawn_entity = Node(package='ros_gz_sim', executable='create',
+                        arguments=['-topic', 'robot_description',
+                                   '-name', 'my_bot',
+                                   '-z', '0.1'],
+                        output='screen')
 
-    )
-    print("[DEBUG] Included gz_sim.launch.py")
-
-    # Give Gazebo some time to start up before spawning the robot
-    delay = ExecuteProcess(
-        cmd=['sleep', '5'],
-        output='screen'
-    )
-    print("[DEBUG] Added delay before spawning entity")
-
-    # Spawn the robot in Gazebo
-    spawn_entity = Node(
-        package='ros_gz_sim',
-        executable='create',
-        arguments=[
-            '-topic', 'robot_description',
-            '-name', 'my_bot',
-            '-z', '0.1'
-        ],
-        output='screen'
-    )
-    print("[DEBUG] Spawn entity node created")
-    spawn_delay = TimerAction(period=5.0, actions=[spawn_entity])
-
-    # Launch the controllers
-    # controller_spawner = Node(
-    #     package='controller_manager',
-    #     executable='spawner',
-    #     arguments=['diff_cont', 'joint_broad'],
-    #     output='screen',
-    # )
 
     diff_drive_spawner = Node(
         package="controller_manager",
@@ -105,7 +82,6 @@ def generate_launch_description():
         arguments=["joint_broad"],
     )
 
-    print("[DEBUG] Launched the controllers")
 
     bridge_params = os.path.join(get_package_share_directory(package_name),'config','gz_bridge.yaml')
     ros_gz_bridge = Node(
@@ -118,20 +94,42 @@ def generate_launch_description():
         ]
     )
 
+    # ros_gz_image_bridge = Node(
+    #     package="ros_gz_image",
+    #     executable="image_bridge",
+    #     arguments=["/camera/image_raw"]
+    # )
 
-    # Return the launch description
-    print("[DEBUG] Launch description created, returning...")
+
+
+    # Code for delaying a node (I haven't tested how effective it is)
+    # 
+    # First add the below lines to imports
+    # from launch.actions import RegisterEventHandler
+    # from launch.event_handlers import OnProcessExit
+    #
+    # Then add the following below the current diff_drive_spawner
+    # delayed_diff_drive_spawner = RegisterEventHandler(
+    #     event_handler=OnProcessExit(
+    #         target_action=spawn_entity,
+    #         on_exit=[diff_drive_spawner],
+    #     )
+    # )
+    #
+    # Replace the diff_drive_spawner in the final return with delayed_diff_drive_spawner
+
+
+
+    # Launch them all!
     return LaunchDescription([
-        use_sim_time_arg,
+        rsp,
+        # joystick,
+        # twist_mux,
         world_arg,
-        rsp_launch,
-        gazebo_launch,
-        delay,
-        # spawn_delay,
+        gazebo,
         spawn_entity,
         diff_drive_spawner,
         joint_broad_spawner,
         ros_gz_bridge,
-        # spawn_entity,
-        # controller_spawner
+        # ros_gz_image_bridge
     ])
