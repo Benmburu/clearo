@@ -4,15 +4,13 @@
   <name>clearo</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
-  <maintainer email="my_email@email.com">MY NAME</maintainer>
+  <maintainer email="bennjuguna0@email.com">Ben</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
-
-  <depend>ros2_control_mock_components</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

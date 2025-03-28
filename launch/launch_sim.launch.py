@@ -92,6 +92,11 @@ def generate_launch_description():
             '-p',
             f'config_file:={bridge_params}',
         ]
+        # output="screen",
+        # parameters=[
+        #     {'use_sim_time': True},
+        # ]
+
     )
 
     # ros_gz_image_bridge = Node(
