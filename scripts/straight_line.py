@@ -26,7 +26,7 @@ def main():
     
     # Launch waypoint follower with specified parameters
     cmd = [
-        "ros2", "launch", "articubot_one", "straight_line_waypoints.launch.py",
+        "ros2", "launch", "clearo", "straight_line_waypoints.launch.py",
         f"distance:={distance}",
         f"num_waypoints:={num_waypoints}"
     ]
