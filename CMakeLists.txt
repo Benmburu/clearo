@@ -29,6 +29,7 @@ endif()
 install(PROGRAMS
   scripts/straight_line_waypoints.py
   scripts/straight_line.py
+  scripts/pid_straight_line_controller.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

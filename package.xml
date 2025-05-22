@@ -4,14 +4,19 @@
   <name>clearo</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
-  <maintainer email="my_email@email.com">Josh Newans</maintainer>
+  <maintainer email="bennjuguna0@gmail.com">Ben Njuguna</maintainer>
   <license>TODO: License declaration</license>
-
+  
   <buildtool_depend>ament_cmake</buildtool_depend>
-
+  
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
-
+  
+  <!-- Removed tf_transformations, added ROS2 dependencies -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  
   <export>
     <build_type>ament_cmake</build_type>
   </export>
