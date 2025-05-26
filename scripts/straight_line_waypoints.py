@@ -15,9 +15,9 @@ class BoustrophedonWaypointFollower(Node):
         self.follow_waypoints_client = ActionClient(self, FollowWaypoints, 'follow_waypoints')
         
         # Declare and get parameters
-        self.declare_parameter('row_length', 2.0)  # Length of each row in meters
+        self.declare_parameter('row_length', 1.0)  # Length of each row in meters
         self.declare_parameter('lane_width', 0.3)  # Distance between rows in meters
-        self.declare_parameter('num_rows', 5)  # Number of rows to cover
+        self.declare_parameter('num_rows', 1)  # Number of rows to cover
         self.declare_parameter('overlap', 0.05)  # Overlap between passes in meters
         self.declare_parameter('points_per_row', 10)  # Number of waypoints per row
         
@@ -59,7 +59,7 @@ class BoustrophedonWaypointFollower(Node):
         
         return pose
         
-    def generate_boustrophedon_waypoints(self):
+    # def generate_boustrophedon_waypoints(self):
         """Generate waypoints for a boustrophedon pattern."""
         poses = []
         step_size = self.row_length / self.points_per_row
@@ -105,7 +105,21 @@ class BoustrophedonWaypointFollower(Node):
                     ))
         
         return poses
+
+    def generate_straight_line_waypoints(self):
+        """Generate waypoints for a straight line."""
+        poses = []
+        step_size = self.row_length / self.points_per_row
         
+        # Add waypoints along a straight line in the x direction
+        for j in range(self.points_per_row + 1):  # +1 to include the end point
+            x = j * step_size
+            y = 0.0  # Keep y constant for straight line
+            yaw = 0.0  # Keep facing forward
+            poses.append(self.create_pose(x=x, y=y, yaw=yaw))
+        
+        return poses
+
     def send_waypoints(self):
         """Send boustrophedon pattern waypoints."""
         # Wait for action server
@@ -113,7 +127,8 @@ class BoustrophedonWaypointFollower(Node):
         self.follow_waypoints_client.wait_for_server()
         
         # Generate boustrophedon waypoints
-        poses = self.generate_boustrophedon_waypoints()
+        # poses = self.generate_boustrophedon_waypoints()
+        poses = self.generate_straight_line_waypoints()
             
         # Create goal message
         goal_msg = FollowWaypoints.Goal()
