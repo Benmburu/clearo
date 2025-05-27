@@ -31,6 +31,18 @@ def generate_launch_description():
         default_value='-999.0',
         description='Target heading in degrees (use -999 to use current heading, or specify 0-360)'
     )
+    
+    turn_speed_arg = DeclareLaunchArgument(
+        'turn_speed',
+        default_value='0.3',
+        description='Angular velocity for 90-degree turns (rad/s)'
+    )
+    
+    offset_distance_arg = DeclareLaunchArgument(
+        'offset_distance',
+        default_value='0.2',
+        description='Offset distance for boustrophedon pattern (meters)'
+    )
 
     # PID Straight Line Controller Node
     pid_controller_node = Node(
@@ -42,7 +54,9 @@ def generate_launch_description():
             'target_distance': LaunchConfiguration('distance'),
             'forward_speed': LaunchConfiguration('speed'),
             'kp_heading': LaunchConfiguration('kp_heading'),
-            'target_heading_deg': LaunchConfiguration('target_heading_deg')
+            'target_heading_deg': LaunchConfiguration('target_heading_deg'),
+            'turn_speed': LaunchConfiguration('turn_speed'),
+            'offset_distance': LaunchConfiguration('offset_distance')
         }]
     )
 
@@ -51,5 +65,7 @@ def generate_launch_description():
         speed_arg,
         kp_heading_arg,
         target_heading_arg,
+        turn_speed_arg,
+        offset_distance_arg,
         pid_controller_node
     ])
