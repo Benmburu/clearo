@@ -18,6 +18,9 @@
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>tf_transformations</exec_depend>
 
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

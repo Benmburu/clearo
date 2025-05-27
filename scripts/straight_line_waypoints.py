@@ -7,170 +7,112 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.action import ActionClient
 import math
 
-class BoustrophedonWaypointFollower(Node):
+class StraightLineWaypointFollower(Node):
     def __init__(self):
-        super().__init__('boustrophedon_waypoint_follower')
+        super().__init__('straight_line_waypoint_follower')
         
         # Create an action client for the FollowWaypoints action
         self.follow_waypoints_client = ActionClient(self, FollowWaypoints, 'follow_waypoints')
         
-        # Declare and get parameters
-        self.declare_parameter('row_length', 1.0)  # Length of each row in meters
-        self.declare_parameter('lane_width', 0.3)  # Distance between rows in meters
-        self.declare_parameter('num_rows', 1)  # Number of rows to cover
-        self.declare_parameter('overlap', 0.05)  # Overlap between passes in meters
-        self.declare_parameter('points_per_row', 10)  # Number of waypoints per row
+        # Simple parameters - just what we need
+        self.declare_parameter('distance', 1.0)  # Distance to travel in meters
+        self.declare_parameter('num_waypoints', 5)  # Number of waypoints along the path
         
-        self.row_length = self.get_parameter('row_length').get_parameter_value().double_value
-        self.lane_width = self.get_parameter('lane_width').get_parameter_value().double_value
-        self.num_rows = self.get_parameter('num_rows').get_parameter_value().integer_value
-        self.overlap = self.get_parameter('overlap').get_parameter_value().double_value
-        self.points_per_row = self.get_parameter('points_per_row').get_parameter_value().integer_value
+        self.distance = self.get_parameter('distance').get_parameter_value().double_value
+        self.num_waypoints = self.get_parameter('num_waypoints').get_parameter_value().integer_value
         
-        # Effective lane width (considering overlap)
-        self.effective_width = self.lane_width - self.overlap
-        
-        # Log initialization
-        self.get_logger().info('Boustrophedon waypoint follower initialized')
-        self.get_logger().info(f'Row length: {self.row_length}m, Lane width: {self.lane_width}m')
-        self.get_logger().info(f'Number of rows: {self.num_rows}, Overlap: {self.overlap}m')
+        self.get_logger().info(f'Straight line controller initialized - Distance: {self.distance}m, Waypoints: {self.num_waypoints}')
         
     def create_pose(self, x, y, yaw=0.0):
-        """Create a PoseStamped message."""
+        """Create a PoseStamped message with given coordinates."""
         pose = PoseStamped()
         pose.header.frame_id = 'map'
         pose.header.stamp = self.get_clock().now().to_msg()
+        
+        # Set position
         pose.pose.position.x = x
         pose.pose.position.y = y
         pose.pose.position.z = 0.0
         
-        # Convert yaw to quaternion
-        cy = math.cos(yaw * 0.5)
-        sy = math.sin(yaw * 0.5)
-        cr = math.cos(0.0)  # roll = 0
-        sr = math.sin(0.0)
-        cp = math.cos(0.0)  # pitch = 0
-        sp = math.sin(0.0)
-        
-        pose.pose.orientation.w = cr * cp * cy + sr * sp * sy
-        pose.pose.orientation.x = sr * cp * cy - cr * sp * sy
-        pose.pose.orientation.y = cr * sp * cy + sr * cp * sy
-        pose.pose.orientation.z = cr * cp * sy - sr * sp * cy
+        # Convert yaw to quaternion (simplified for z-axis rotation only)
+        pose.pose.orientation.w = math.cos(yaw * 0.5)
+        pose.pose.orientation.x = 0.0
+        pose.pose.orientation.y = 0.0
+        pose.pose.orientation.z = math.sin(yaw * 0.5)
         
         return pose
         
-    # def generate_boustrophedon_waypoints(self):
-        """Generate waypoints for a boustrophedon pattern."""
-        poses = []
-        step_size = self.row_length / self.points_per_row
-        
-        # Add starting point
-        poses.append(self.create_pose(x=0.0, y=0.0, yaw=0.0))
-        
-        for i in range(self.num_rows):
-            # Even rows move in the positive x direction
-            if i % 2 == 0:
-                # Add waypoints along the row
-                for j in range(1, self.points_per_row + 1):
-                    x = j * step_size
-                    y = i * self.effective_width
-                    # At the end of the row, point in the direction of the next row
-                    yaw = 0.0 if j < self.points_per_row else math.pi/2
-                    poses.append(self.create_pose(x=x, y=y, yaw=yaw))
-                
-                # Add waypoint to move to the next row (if not the last row)
-                if i < self.num_rows - 1:
-                    poses.append(self.create_pose(
-                        x=self.row_length,
-                        y=(i + 1) * self.effective_width,
-                        yaw=math.pi  # Facing negative x direction
-                    ))
-            
-            # Odd rows move in the negative x direction
-            else:
-                # Add waypoints along the row
-                for j in range(1, self.points_per_row + 1):
-                    x = self.row_length - (j * step_size)
-                    y = i * self.effective_width
-                    # At the end of the row, point in the direction of the next row
-                    yaw = math.pi if j < self.points_per_row else math.pi/2
-                    poses.append(self.create_pose(x=x, y=y, yaw=yaw))
-                
-                # Add waypoint to move to the next row (if not the last row)
-                if i < self.num_rows - 1:
-                    poses.append(self.create_pose(
-                        x=0.0,
-                        y=(i + 1) * self.effective_width,
-                        yaw=0.0  # Facing positive x direction
-                    ))
-        
-        return poses
-
     def generate_straight_line_waypoints(self):
-        """Generate waypoints for a straight line."""
+        """Generate waypoints for a straight line path."""
         poses = []
-        step_size = self.row_length / self.points_per_row
+        step_size = self.distance / self.num_waypoints
         
-        # Add waypoints along a straight line in the x direction
-        for j in range(self.points_per_row + 1):  # +1 to include the end point
-            x = j * step_size
-            y = 0.0  # Keep y constant for straight line
-            yaw = 0.0  # Keep facing forward
-            poses.append(self.create_pose(x=x, y=y, yaw=yaw))
+        # Create waypoints from current position (0,0) to target distance
+        for i in range(self.num_waypoints + 1):  # +1 to include the final point
+            x = i * step_size
+            y = 0.0  # Keep y constant - straight line
+            yaw = 0.0  # Keep facing forward (positive x direction)
+            poses.append(self.create_pose(x, y, yaw))
         
         return poses
 
     def send_waypoints(self):
-        """Send boustrophedon pattern waypoints."""
-        # Wait for action server
+        """Send the straight line waypoints to the robot."""
+        # Wait for the navigation action server to be available
         self.get_logger().info('Waiting for follow_waypoints action server...')
-        self.follow_waypoints_client.wait_for_server()
+        if not self.follow_waypoints_client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().error('Action server not available!')
+            return
         
-        # Generate boustrophedon waypoints
-        # poses = self.generate_boustrophedon_waypoints()
+        # Generate the waypoints
         poses = self.generate_straight_line_waypoints()
-            
-        # Create goal message
+        
+        # Create the goal message
         goal_msg = FollowWaypoints.Goal()
         goal_msg.poses = poses
         
-        self.get_logger().info(f'Sending {len(poses)} waypoints for a boustrophedon path')
+        self.get_logger().info(f'Sending {len(poses)} waypoints for straight line path')
+        for i, pose in enumerate(poses):
+            self.get_logger().info(f'Waypoint {i}: x={pose.pose.position.x:.2f}, y={pose.pose.position.y:.2f}')
         
-        # Send goal
+        # Send the goal to the action server
         send_goal_future = self.follow_waypoints_client.send_goal_async(goal_msg)
         send_goal_future.add_done_callback(self.goal_response_callback)
     
     def goal_response_callback(self, future):
+        """Handle the response from the action server."""
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().error('Goal was rejected by the action server')
             return
             
-        self.get_logger().info('Goal accepted by the action server')
+        self.get_logger().info('Goal accepted! Robot is moving...')
         
-        # Get the result
+        # Wait for the result
         get_result_future = goal_handle.get_result_async()
         get_result_future.add_done_callback(self.get_result_callback)
         
     def get_result_callback(self, future):
-        status = future.result().result
-        self.get_logger().info('Waypoint following completed successfully')
+        """Handle the final result."""
+        result = future.result().result
+        self.get_logger().info('Robot finished moving in straight line!')
         
 
 def main():
-    # Initialize ROS
+    # Initialize ROS2
     rclpy.init()
     
-    # Create node
-    node = BoustrophedonWaypointFollower()
+    # Create the node
+    node = StraightLineWaypointFollower()
     
-    # Send waypoints
+    # Send the waypoints
     node.send_waypoints()
     
     try:
+        # Keep the node running until interrupted
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info('Shutting down...')
     finally:
         node.destroy_node()
         rclpy.shutdown()

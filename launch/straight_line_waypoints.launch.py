@@ -38,7 +38,7 @@ def generate_launch_description():
     # Create node with parameters from launch arguments
     waypoint_follower_node = Node(
         package='clearo',
-        executable='straight_line_waypoints.py',  # Keep the filename the same unless you rename it
+        executable='straight_line_waypoint_follower.py',  # Keep the filename the same unless you rename it
         name='boustrophedon_waypoint_follower',
         output='screen',
         parameters=[{
