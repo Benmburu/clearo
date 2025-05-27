@@ -32,6 +32,7 @@ install(PROGRAMS
   scripts/pid_straight_line_controller.py
   scripts/floor_coverage_controller.py
   scripts/nmpc_controller.py
+  scripts/square_path.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
