@@ -34,6 +34,8 @@ install(PROGRAMS
   scripts/nmpc_controller.py
   scripts/square_path.py
   scripts/nav2_straight_line_goal.py
+
+  scripts/hybrid_controller.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
