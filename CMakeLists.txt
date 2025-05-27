@@ -33,6 +33,7 @@ install(PROGRAMS
   scripts/floor_coverage_controller.py
   scripts/nmpc_controller.py
   scripts/square_path.py
+  scripts/nav2_straight_line_goal.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
