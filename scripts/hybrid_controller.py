@@ -9,6 +9,8 @@ import numpy as np
 import math
 import time
 from enum import Enum
+import casadi as ca
+import time
 
 class ControlMode(Enum):
     PID = 1
@@ -141,18 +143,182 @@ class HybridController(Node):
             
             rclpy.spin_once(self, timeout_sec=0.1)
 
-    # Add PID and NMPC movement methods here
     def execute_pid_movement(self, target_x, target_y):
         """Execute PID-controlled movement"""
-        # Implementation from pid_straight_line_controller.py
-        # ... (add PID control logic)
-        pass
+        # Calculate target heading and distance
+        dx = target_x - self.current_x
+        dy = target_y - self.current_y
+        target_heading = math.atan2(dy, dx)
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        self.get_logger().info(f'PID movement to ({target_x:.2f}, {target_y:.2f})')
+        self.get_logger().info(f'Distance: {distance:.2f}m, Heading: {math.degrees(target_heading):.1f}°')
+        
+        # First, turn to face the target
+        while rclpy.ok():
+            # Calculate heading error
+            heading_error = target_heading - self.current_yaw
+            heading_error = math.atan2(math.sin(heading_error), math.cos(heading_error))
+            
+            # Check if we're facing the right direction
+            if abs(heading_error) < math.radians(2.0):  # 2-degree tolerance
+                break
+                
+            # Create and publish turn command
+            twist = Twist()
+            twist.angular.z = self.kp_heading * heading_error
+            twist.angular.z = max(min(twist.angular.z, self.turn_speed), -self.turn_speed)
+            self.cmd_vel_pub.publish(twist)
+            
+            rclpy.spin_once(self, timeout_sec=0.1)
+        
+        # Then move forward while maintaining heading
+        start_time = time.time()
+        while rclpy.ok():
+            # Calculate current distance to target
+            current_dx = target_x - self.current_x
+            current_dy = target_y - self.current_y
+            current_distance = math.sqrt(current_dx*current_dx + current_dy*current_dy)
+            
+            # Check if we've reached the target
+            if current_distance < 0.05:  # 5cm tolerance
+                # Stop the robot
+                twist = Twist()
+                self.cmd_vel_pub.publish(twist)
+                return True
+                
+            # Calculate heading error
+            heading_error = target_heading - self.current_yaw
+            heading_error = math.atan2(math.sin(heading_error), math.cos(heading_error))
+            
+            # Create movement command
+            twist = Twist()
+            twist.linear.x = self.forward_speed
+            twist.angular.z = self.kp_heading * heading_error
+            
+            # Publish command
+            self.cmd_vel_pub.publish(twist)
+            
+            # Log progress periodically
+            if time.time() - start_time > 1.0:
+                self.get_logger().info(f'Distance to target: {current_distance:.2f}m')
+                start_time = time.time()
+                
+            rclpy.spin_once(self, timeout_sec=0.1)
+        
+        return False
 
-    def execute_nmpc_movement(self, target_x, target_y):
-        """Execute NMPC-controlled movement"""
-        # Implementation from nmpc_controller.py
-        # ... (add NMPC control logic)
-        pass
+def execute_nmpc_movement(self, target_x, target_y):
+    """Execute NMPC-controlled movement"""
+    # NMPC parameters
+    N = 10  # Prediction horizon
+    dt = 0.1  # Time step
+    max_speed = self.forward_speed
+    max_angular_speed = self.turn_speed
+    
+    # Initialize optimization problem
+    opti = ca.Opti()
+    
+    # Decision variables
+    x = opti.variable(3, N+1)  # state trajectory [x, y, theta]
+    u = opti.variable(2, N)    # control inputs [v, omega]
+    
+    # Parameters
+    x0 = opti.parameter(3)     # current state
+    xref = opti.parameter(3)   # target state
+    
+    # Set current state
+    current_state = [self.current_x, self.current_y, self.current_yaw]
+    target_state = [target_x, target_y, self.current_yaw]  # maintain current heading
+    
+    # Objective function
+    cost = 0
+    Q = np.diag([1.0, 1.0, 0.1])  # State cost
+    R = np.diag([0.1, 0.05])      # Control cost
+    
+    for k in range(N):
+        # State error cost
+        state_error = x[:, k] - xref
+        cost += ca.mtimes([state_error.T, Q @ state_error])
+        
+        # Control cost
+        control_cost = ca.mtimes([u[:, k].T, R @ u[:, k]])
+        cost += control_cost
+        
+        # Obstacle avoidance cost
+        for obs_x, obs_y in self.obstacles:
+            dist = ca.sqrt((x[0, k] - obs_x)**2 + (x[1, k] - obs_y)**2)
+            cost += 100.0 / (dist + 0.1)  # Repulsive potential
+    
+    opti.minimize(cost)
+    
+    # System dynamics constraints
+    for k in range(N):
+        # Unicycle model
+        opti.subject_to(x[:, k+1] == x[:, k] + dt * ca.vertcat(
+            u[0, k] * ca.cos(x[2, k]),
+            u[0, k] * ca.sin(x[2, k]),
+            u[1, k]
+        ))
+    
+    # Input constraints
+    opti.subject_to(opti.bounded(-max_speed, u[0, :], max_speed))
+    opti.subject_to(opti.bounded(-max_angular_speed, u[1, :], max_angular_speed))
+    
+    # Initial state constraint
+    opti.subject_to(x[:, 0] == x0)
+    
+    # Create solver
+    opts = {'ipopt.print_level': 0, 'print_time': 0}
+    opti.solver('ipopt', opts)
+    
+    # Control loop
+    start_time = time.time()
+    while rclpy.ok():
+        try:
+            # Set current state and reference
+            opti.set_value(x0, current_state)
+            opti.set_value(xref, target_state)
+            
+            # Solve optimization problem
+            sol = opti.solve()
+            
+            # Extract first control input
+            v = sol.value(u[0, 0])
+            omega = sol.value(u[1, 0])
+            
+            # Apply control
+            twist = Twist()
+            twist.linear.x = v
+            twist.angular.z = omega
+            self.cmd_vel_pub.publish(twist)
+            
+            # Check if goal reached
+            dist_to_goal = math.sqrt(
+                (self.current_x - target_x)**2 + 
+                (self.current_y - target_y)**2
+            )
+            if dist_to_goal < 0.05:  # 5cm tolerance
+                # Stop the robot
+                twist = Twist()
+                self.cmd_vel_pub.publish(twist)
+                return True
+                
+            # Log progress periodically
+            if time.time() - start_time > 1.0:
+                self.get_logger().info(f'Distance to target: {dist_to_goal:.2f}m')
+                start_time = time.time()
+                
+            # Update current state
+            current_state = [self.current_x, self.current_y, self.current_yaw]
+            
+        except Exception as e:
+            self.get_logger().error(f'NMPC optimization failed: {str(e)}')
+            return False
+            
+        rclpy.spin_once(self, timeout_sec=0.1)
+    
+    return False
 
 def main(args=None):
     rclpy.init(args=args)
