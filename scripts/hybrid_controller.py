@@ -11,6 +11,8 @@ import time
 from enum import Enum
 import casadi as ca
 import time
+from nav_msgs.msg import Path
+from geometry_msgs.msg import PoseStamped
 
 class ControlMode(Enum):
     PID = 1
@@ -22,6 +24,8 @@ class HybridController(Node):
         
         # Publishers
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        # Add path publisher
+        self.path_pub = self.create_publisher(Path, '/hybrid_controller/planned_path', 10)
         
         # Subscribers
         self.odom_sub = self.create_subscription(Odometry, '/diff_cont/odom', self.odom_callback, 10)
@@ -61,6 +65,42 @@ class HybridController(Node):
         self.scan_received = False
         
         self.get_logger().info('Hybrid Controller initialized')
+
+    def publish_path(self, waypoints, frame_id='base_link'):
+        """Publish path for visualization in RViz"""
+        path_msg = Path()
+        path_msg.header.stamp = self.get_clock().now().to_msg()
+        path_msg.header.frame_id = frame_id
+        
+        for wp_x, wp_y in waypoints:
+            pose_stamped = PoseStamped()
+            pose_stamped.header.stamp = path_msg.header.stamp
+            pose_stamped.header.frame_id = frame_id
+            
+            if frame_id == 'base_link':
+                # Transform to base_link frame
+                dx = wp_x - self.current_x
+                dy = wp_y - self.current_y
+                
+                # Transform to robot's local frame
+                local_x = dx * math.cos(self.current_yaw) + dy * math.sin(self.current_yaw)
+                local_y = -dx * math.sin(self.current_yaw) + dy * math.cos(self.current_yaw)
+                
+                pose_stamped.pose.position.x = local_x
+                pose_stamped.pose.position.y = local_y
+            else:
+                # Use global coordinates
+                pose_stamped.pose.position.x = wp_x
+                pose_stamped.pose.position.y = wp_y
+            
+            pose_stamped.pose.position.z = 0.0
+            pose_stamped.pose.orientation.w = 1.0
+            
+            path_msg.poses.append(pose_stamped)
+        
+        self.path_pub.publish(path_msg)
+        self.get_logger().info(f'Published path with {len(waypoints)} waypoints in {frame_id} frame')
+
 
     def scan_callback(self, msg):
         """Process laser scan data to detect obstacles"""
@@ -358,6 +398,9 @@ class HybridController(Node):
         
         # Final target
         waypoints.append((target_x, target_y))
+
+        # Publish the generated path for visualization
+        self.publish_path(waypoints, 'base_link')
         
         return waypoints
 
@@ -367,6 +410,9 @@ class HybridController(Node):
         
         # Generate avoidance waypoints
         waypoints = self.generate_avoidance_path(target_x, target_y)
+
+        # Publish path for visualization
+        self.publish_path(waypoints, 'base_link')
         
         self.get_logger().info(f'Generated {len(waypoints)} waypoints for avoidance')
         

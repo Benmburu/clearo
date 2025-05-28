@@ -31,10 +31,11 @@ install(PROGRAMS
   scripts/straight_line.py
   scripts/pid_straight_line_controller.py
   scripts/floor_coverage_controller.py
-  scripts/nmpc_controller.py
+  scripts/nmpc_path_planner.py
   scripts/square_path.py
   scripts/nav2_straight_line_goal.py
   scripts/hybrid_controller.py
+  scripts/pid_controller_visual.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
