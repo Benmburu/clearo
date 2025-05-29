@@ -21,7 +21,7 @@ def generate_launch_description():
     # IMU Node
     imu_node = Node(
         package='clearo',
-        executable='mpu6050_node',
+        executable='mpu6050_node.py',
         name='mpu6050_node',
         output='screen',
         parameters=[{
