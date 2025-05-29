@@ -36,6 +36,8 @@ install(PROGRAMS
   scripts/nav2_straight_line_goal.py
   scripts/hybrid_controller.py
   scripts/pid_controller_visual.py
+  scripts/mpu6050_node.py
+  scripts/calibrate_mpu6050.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -180,4 +180,9 @@
         <mu2 value="0.001"/>
     </gazebo>
 
+    <xacro:include filename="imu.xacro"/>
+    <xacro:imu_sensor prefix=""/>
+
+
+
 </robot>
