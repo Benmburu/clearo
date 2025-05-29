@@ -19,11 +19,23 @@ class MPU6050Node(Node):
         self.timer = self.create_timer(0.02, self.publish_imu_data)  # 50Hz
         
         # MPU6050 I2C setup
-        self.bus = smbus.SMBus(1)  # I2C bus 1
+        try:
+            self.bus = smbus.SMBus(1)  # I2C bus 1
+        except:
+            try:
+                import smbus2
+                self.bus = smbus2.SMBus(1)
+                self.get_logger().info('Using smbus2 library')
+            except:
+                self.get_logger().error('Neither smbus nor smbus2 available')
+                return
+                
         self.device_address = 0x68  # MPU6050 default address
         
         # Initialize MPU6050
-        self.init_mpu6050()
+        if not self.init_mpu6050():
+            self.get_logger().error('Failed to initialize MPU6050, shutting down node')
+            return
         
         # Calibration offsets (you'll need to calibrate these)
         self.accel_offset = [0.0, 0.0, 0.0]
@@ -41,6 +53,12 @@ class MPU6050Node(Node):
     def init_mpu6050(self):
         """Initialize the MPU6050 sensor"""
         try:
+            # Check if I2C device is available
+            import os
+            if not os.path.exists('/dev/i2c-1'):
+                self.get_logger().error('I2C device /dev/i2c-1 not found. Enable I2C interface.')
+                return False
+                
             # Wake up the MPU6050
             self.bus.write_byte_data(self.device_address, 0x6B, 0)
             
@@ -52,9 +70,12 @@ class MPU6050Node(Node):
             
             time.sleep(0.1)
             self.get_logger().info('MPU6050 initialized successfully')
+            return True
             
         except Exception as e:
             self.get_logger().error(f'Failed to initialize MPU6050: {e}')
+            self.get_logger().error('Make sure I2C is enabled and MPU6050 is connected to address 0x68')
+            return False
 
     def read_raw_data(self, addr):
         """Read raw 16-bit data from MPU6050"""
