@@ -7,7 +7,6 @@ from geometry_msgs.msg import Vector3
 import smbus
 import math
 import time
-from tf_transformations import quaternion_from_euler
 
 class MPU6050Node(Node):
     def __init__(self):
@@ -90,6 +89,22 @@ class MPU6050Node(Node):
             self.get_logger().error(f'Error reading IMU data: {e}')
             return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
+    def euler_to_quaternion(self, roll, pitch, yaw):
+        """Convert Euler angles to quaternion"""
+        cy = math.cos(yaw * 0.5)
+        sy = math.sin(yaw * 0.5)
+        cp = math.cos(pitch * 0.5)
+        sp = math.sin(pitch * 0.5)
+        cr = math.cos(roll * 0.5)
+        sr = math.sin(roll * 0.5)
+
+        qw = cr * cp * cy + sr * sp * sy
+        qx = sr * cp * cy - cr * sp * sy
+        qy = cr * sp * cy + sr * cp * sy
+        qz = cr * cp * sy - sr * sp * cy
+
+        return [qx, qy, qz, qw]
+
     def complementary_filter(self, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z):
         """Apply complementary filter for orientation estimation"""
         # Calculate angles from accelerometer
@@ -118,7 +133,7 @@ class MPU6050Node(Node):
         imu_msg.header.frame_id = 'imu_link'
         
         # Set orientation (quaternion from Euler angles)
-        quaternion = quaternion_from_euler(self.roll, self.pitch, self.yaw)
+        quaternion = self.euler_to_quaternion(self.roll, self.pitch, self.yaw)
         imu_msg.orientation.x = quaternion[0]
         imu_msg.orientation.y = quaternion[1]
         imu_msg.orientation.z = quaternion[2]
