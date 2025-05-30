@@ -3,8 +3,10 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan, Imu
 import math
 import time
+import numpy as np
 
 
 class PIDStraightLineController(Node):
@@ -12,20 +14,24 @@ class PIDStraightLineController(Node):
         super().__init__('pid_straight_controller')
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.odom_sub = self.create_subscription(Odometry, '/diff_cont/odom', self.odom_callback, 10)
+        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
+        self.imu_sub = self.create_subscription(Imu, '/imu/data', self.imu_callback, 10)
         
         # Parameters
         self.declare_parameter('target_distance', 1.0)
         self.declare_parameter('forward_speed', 0.2)
-        self.declare_parameter('kp_heading', 1.0)
+        self.declare_parameter('kp_heading', 12.0)
         self.declare_parameter('target_heading_deg', -999.0)
         self.declare_parameter('turn_speed', 0.1)  # Angular velocity for turns
         self.declare_parameter('offset_distance', 0.2)  # 20cm offset
+        self.declare_parameter('safety_margin', 0.15)  # 15cm safety margin from walls
         
         self.target_distance = self.get_parameter('target_distance').value
         self.forward_speed = self.get_parameter('forward_speed').value
         self.kp_heading = self.get_parameter('kp_heading').value
         self.turn_speed = self.get_parameter('turn_speed').value
         self.offset_distance = self.get_parameter('offset_distance').value
+        self.safety_margin = self.get_parameter('safety_margin').value
         
         # Handle target heading parameter
         target_heading_param = self.get_parameter('target_heading_deg').value
@@ -44,18 +50,132 @@ class PIDStraightLineController(Node):
         self.current_x = 0.0
         self.current_y = 0.0
         self.current_yaw = 0.0
+        self.current_yaw_imu = 0.0  # IMU-based yaw
         self.start_x = None
         self.start_y = None
         self.target_yaw = None
         self.odom_received = False
+        self.scan_received = False
+        self.imu_received = False
         self.last_log_time = 0.0
         
-        self.get_logger().info(f'Boustrophedon Controller initialized:')
+        # LIDAR data for room analysis
+        self.latest_scan = None
+        self.room_width_left = None
+        self.room_width_right = None
+        self.room_width_total = None
+        self.columns_needed = None
+        self.current_column = 0
+        self.moving_right = True  # Direction flag for boustrophedon pattern
+        
+        self.get_logger().info(f'Enhanced Boustrophedon Controller with IMU initialized:')
         self.get_logger().info(f'  Target distance: {self.target_distance}m')
         self.get_logger().info(f'  Forward speed: {self.forward_speed}m/s')
         self.get_logger().info(f'  Turn speed: {self.turn_speed}rad/s')
         self.get_logger().info(f'  Offset distance: {self.offset_distance}m')
+        self.get_logger().info(f'  Safety margin: {self.safety_margin}m')
         self.get_logger().info(f'  Heading PID gain: {self.kp_heading}')
+        
+    def imu_callback(self, msg):
+        """Process IMU data for heading information"""
+        # Extract yaw from quaternion
+        orientation = msg.orientation
+        self.current_yaw_imu = self.quaternion_to_yaw(
+            orientation.x, orientation.y, orientation.z, orientation.w
+        )
+        
+        if not self.imu_received:
+            self.imu_received = True
+            self.get_logger().info('IMU data received')
+            self.get_logger().info(f'Initial IMU heading: {math.degrees(self.current_yaw_imu):.1f} degrees')
+    
+    def get_current_heading(self):
+        """Get current heading from IMU if available, otherwise odometry"""
+        if self.imu_received:
+            return self.current_yaw_imu
+        else:
+            return self.current_yaw
+    
+    def scan_callback(self, msg):
+        """Process LIDAR scan data"""
+        self.latest_scan = msg
+        if not self.scan_received:
+            self.scan_received = True
+            self.get_logger().info('LIDAR scan data received')
+    
+    def calculate_room_width(self):
+        """Calculate room width using LIDAR data"""
+        if self.latest_scan is None:
+            self.get_logger().warn('No LIDAR data available for width calculation')
+            return False
+        
+        # Get scan parameters
+        angle_min = self.latest_scan.angle_min
+        angle_increment = self.latest_scan.angle_increment
+        ranges = np.array(self.latest_scan.ranges)
+        
+        # Filter out invalid readings
+        valid_ranges = ranges[(ranges >= self.latest_scan.range_min) & 
+                             (ranges <= self.latest_scan.range_max) & 
+                             (~np.isnan(ranges)) & 
+                             (~np.isinf(ranges))]
+        
+        if len(valid_ranges) == 0:
+            self.get_logger().warn('No valid LIDAR readings found')
+            return False
+        
+        # Calculate angles for each reading
+        angles = np.array([angle_min + i * angle_increment for i in range(len(ranges))])
+        
+        # Find left and right wall distances (perpendicular to robot)
+        left_angle_target = math.pi / 2  # 90 degrees
+        right_angle_target = -math.pi / 2  # -90 degrees
+        
+        # Find closest angle indices to left and right
+        left_idx = np.argmin(np.abs(angles - left_angle_target))
+        right_idx = np.argmin(np.abs(angles - right_angle_target))
+        
+        # Get average of nearby readings for more stable measurement
+        window_size = 5  # Average over 5 readings
+        
+        # Left wall distance
+        left_start = max(0, left_idx - window_size // 2)
+        left_end = min(len(ranges), left_idx + window_size // 2 + 1)
+        left_readings = ranges[left_start:left_end]
+        left_valid = left_readings[(left_readings >= self.latest_scan.range_min) & 
+                                  (left_readings <= self.latest_scan.range_max) & 
+                                  (~np.isnan(left_readings)) & 
+                                  (~np.isinf(left_readings))]
+        
+        # Right wall distance
+        right_start = max(0, right_idx - window_size // 2)
+        right_end = min(len(ranges), right_idx + window_size // 2 + 1)
+        right_readings = ranges[right_start:right_end]
+        right_valid = right_readings[(right_readings >= self.latest_scan.range_min) & 
+                                    (right_readings <= self.latest_scan.range_max) & 
+                                    (~np.isnan(right_readings)) & 
+                                    (~np.isinf(right_readings))]
+        
+        if len(left_valid) == 0 or len(right_valid) == 0:
+            self.get_logger().warn('Could not get valid wall distance measurements')
+            return False
+        
+        self.room_width_left = np.mean(left_valid)
+        self.room_width_right = np.mean(right_valid)
+        self.room_width_total = self.room_width_left + self.room_width_right
+        
+        # Calculate number of columns needed
+        effective_width = self.room_width_total - (2 * self.safety_margin)
+        self.columns_needed = max(1, int(math.ceil(effective_width / self.offset_distance)))
+        
+        self.get_logger().info(f'Room width calculation:')
+        self.get_logger().info(f'  Left wall distance: {self.room_width_left:.2f}m')
+        self.get_logger().info(f'  Right wall distance: {self.room_width_right:.2f}m')
+        self.get_logger().info(f'  Total room width: {self.room_width_total:.2f}m')
+        self.get_logger().info(f'  Effective cleaning width: {effective_width:.2f}m')
+        self.get_logger().info(f'  Columns needed: {self.columns_needed}')
+        
+        return True
         
     def odom_callback(self, msg):
         self.current_x = msg.pose.pose.position.x
@@ -72,16 +192,20 @@ class PIDStraightLineController(Node):
             self.start_x = self.current_x
             self.start_y = self.current_y
             
-            # Set target heading
+            # Set target heading - prefer IMU if available
             if self.target_heading_deg is not None:
                 self.target_yaw = math.radians(self.target_heading_deg)
                 self.get_logger().info(f'Using specified target heading: {self.target_heading_deg:.1f} degrees')
             else:
-                self.target_yaw = self.current_yaw
-                self.get_logger().info(f'Using current heading as target: {math.degrees(self.target_yaw):.1f} degrees')
+                current_heading = self.get_current_heading()
+                self.target_yaw = current_heading
+                heading_source = "IMU" if self.imu_received else "odometry"
+                self.get_logger().info(f'Using current {heading_source} heading as target: {math.degrees(self.target_yaw):.1f} degrees')
             
             self.get_logger().info(f'Starting position: ({self.start_x:.2f}, {self.start_y:.2f})')
-            self.get_logger().info(f'Current heading: {math.degrees(self.current_yaw):.1f} degrees')
+            self.get_logger().info(f'Current odometry heading: {math.degrees(self.current_yaw):.1f} degrees')
+            if self.imu_received:
+                self.get_logger().info(f'Current IMU heading: {math.degrees(self.current_yaw_imu):.1f} degrees')
     
     def quaternion_to_yaw(self, x, y, z, w):
         siny_cosp = 2 * (w * z + x * y)
@@ -92,38 +216,64 @@ class PIDStraightLineController(Node):
         """Normalize angle to [-pi, pi]"""
         return math.atan2(math.sin(angle), math.cos(angle))
     
+    def log_heading_state(self, context=""):
+        """Log current heading state from all sources"""
+        heading_source = "IMU" if self.imu_received else "odometry"
+        current_heading = self.get_current_heading()
+        
+        log_msg = f'[{context}] Heading State:'
+        log_msg += f' Current({heading_source}): {math.degrees(current_heading):.2f}°'
+        
+        if self.imu_received:
+            log_msg += f', IMU: {math.degrees(self.current_yaw_imu):.2f}°'
+        
+        log_msg += f', Odom: {math.degrees(self.current_yaw):.2f}°'
+        log_msg += f', Position: ({self.current_x:.3f}, {self.current_y:.3f})'
+        
+        self.get_logger().info(log_msg)
+    
     def turn_right_90_degrees(self):
-        """Turn exactly 100 degrees to the right"""
-        self.get_logger().info('Starting 100-degree right turn...')
+        """Turn exactly 90 degrees to the right using original bang-bang approach with IMU"""
+        self.get_logger().info('Starting 90-degree right turn (using original approach with IMU)...')
         
-        # Calculate target heading (100 degrees clockwise from current)
-        start_heading = self.current_yaw
-        target_heading = self.normalize_angle(start_heading - math.pi*105/180)  # -100 degrees
+        # Log initial state
+        self.log_heading_state("TURN_START")
         
-        self.get_logger().info(f'Turn start heading: {math.degrees(start_heading):.1f}°')
+        # Calculate target heading (90 degrees clockwise from current)
+        start_heading = self.get_current_heading()
+        target_heading = self.normalize_angle(start_heading - math.pi/2)  # -90 degrees
+        
+        heading_source = "IMU" if self.imu_received else "odometry"
+        self.get_logger().info(f'Turn start heading ({heading_source}): {math.degrees(start_heading):.1f}°')
         self.get_logger().info(f'Turn target heading: {math.degrees(target_heading):.1f}°')
         
         twist = Twist()
         
         while rclpy.ok():
-            # Process callbacks for fresh odometry
+            # Process callbacks for fresh sensor data
             rclpy.spin_once(self, timeout_sec=0.01)
             
-            # Calculate heading error
-            heading_error = target_heading - self.current_yaw
+            # Calculate heading error using IMU if available
+            current_heading = self.get_current_heading()
+            heading_error = target_heading - current_heading
             heading_error = self.normalize_angle(heading_error)
             
-            # Check if turn is complete (within 2 degrees tolerance)
-            if abs(heading_error) < math.radians(0.5):
+            # Check if turn is complete (within 0.5 degrees tolerance - same as original)
+            total_turn = abs(self.normalize_angle(current_heading - start_heading))
+
+            if total_turn >= math.radians(89.0):
                 twist.angular.z = 0.0
                 self.cmd_vel_pub.publish(twist)
                 
-                total_turn = self.normalize_angle(self.current_yaw - start_heading)
+                total_turn = self.normalize_angle(current_heading - start_heading)
                 self.get_logger().info(f'Turn completed! Turned {math.degrees(total_turn):.1f}°')
-                self.get_logger().info(f'Final heading: {math.degrees(self.current_yaw):.1f}°')
+                self.get_logger().info(f'Final heading ({heading_source}): {math.degrees(current_heading):.1f}°')
+                
+                # Log final state
+                self.log_heading_state("TURN_COMPLETE")
                 break
             
-            # Apply turning velocity (negative for right turn)
+            # Apply turning velocity (negative for right turn) - same bang-bang as original
             if heading_error > 0:
                 twist.angular.z = self.turn_speed
             else:
@@ -135,129 +285,103 @@ class PIDStraightLineController(Node):
             # Log progress
             current_time = time.time()
             if current_time - self.last_log_time > 0.5:
-                current_turn = self.normalize_angle(self.current_yaw - start_heading)
-                self.get_logger().info(f'Turning... Current: {math.degrees(self.current_yaw):.1f}°, '
+                current_turn = self.normalize_angle(current_heading - start_heading)
+                self.get_logger().info(f'Turning... Current: {math.degrees(current_heading):.1f}°, '
                                      f'Turned: {math.degrees(current_turn):.1f}°, '
                                      f'Error: {math.degrees(heading_error):.1f}°')
                 self.last_log_time = current_time
             
             time.sleep(0.05)
     
-    # def turn_right_90_degrees(self):
-    #     """Turn exactly 90 degrees to the right using PID control"""
-    #     self.get_logger().info('Starting 90-degree right turn with PID control...')
+    def turn_left_90_degrees(self):
+        """Turn exactly 90 degrees to the left using original bang-bang approach with IMU"""
+        self.get_logger().info('Starting 90-degree left turn (using original approach with IMU)...')
         
-    #     # Calculate target heading (90 degrees clockwise from current)
-    #     start_heading = self.current_yaw
-    #     # Adjust the target angle to match the real-world 90 degrees
-    #     # Based on your logs, a 145-degree change in the odometry reading corresponds to a 90-degree real turn
-    #     # So we'll use that ratio to calculate our target
-    #     real_world_adjustment = 145.0/90.0  # Adjustment factor
-    #     target_heading = self.normalize_angle(start_heading - (math.pi/2) * real_world_adjustment)
+        # Log initial state
+        self.log_heading_state("TURN_START")
         
-    #     self.get_logger().info(f'Turn start heading: {math.degrees(start_heading):.1f}°')
-    #     self.get_logger().info(f'Turn target heading: {math.degrees(target_heading):.1f}°')
+        # Calculate target heading (90 degrees counter-clockwise from current)
+        start_heading = self.get_current_heading()
+        target_heading = self.normalize_angle(start_heading + math.pi/2)  # +90 degrees
         
-    #     twist = Twist()
+        heading_source = "IMU" if self.imu_received else "odometry"
+        self.get_logger().info(f'Turn start heading ({heading_source}): {math.degrees(start_heading):.1f}°')
+        self.get_logger().info(f'Turn target heading: {math.degrees(target_heading):.1f}°')
         
-    #     # PID parameters for turning - adjusted to prevent oscillation
-    #     kp = 0.3  # Reduced from 0.5 to decrease overshoot
-    #     ki = 0.01  # Reduced from 0.05 to reduce oscillation
-    #     kd = 0.3  # Increased from 0.2 to dampen oscillations
+        twist = Twist()
         
-    #     integral = 0.0
-    #     last_error = 0.0
-    #     max_integral = 0.5  # Reduced anti-windup limit
-        
-    #     # Rate limiter
-    #     max_angular_velocity = self.turn_speed
-    #     min_angular_velocity = 0.05  # Minimum velocity to overcome friction
-        
-    #     # Add timeout mechanism to prevent infinite loops
-    #     start_time = time.time()
-    #     timeout = 15.0  # 15 seconds max for a turn
-        
-    #     # Add settling time counter to ensure stability before completing
-    #     settled_count = 0
-    #     required_settled_readings = 5  # Need this many consecutive stable readings
-        
-    #     while rclpy.ok():
-    #         # Process callbacks for fresh odometry
-    #         rclpy.spin_once(self, timeout_sec=0.01)
+        while rclpy.ok():
+            # Process callbacks for fresh sensor data
+            rclpy.spin_once(self, timeout_sec=0.01)
             
-    #         # Calculate heading error
-    #         heading_error = target_heading - self.current_yaw
-    #         heading_error = self.normalize_angle(heading_error)
+            # Calculate heading error using IMU if available
+            current_heading = self.get_current_heading()
+            heading_error = target_heading - current_heading
+            heading_error = self.normalize_angle(heading_error)
             
-    #         # PID calculation
-    #         integral += heading_error * 0.05  # dt = 0.05
-    #         integral = max(min(integral, max_integral), -max_integral)  # Anti-windup
+            # Check if turn is complete (within 0.5 degrees tolerance - same as original)
+            total_turn = abs(self.normalize_angle(current_heading - start_heading))
+
+            if total_turn >= math.radians(89.0):
+                twist.angular.z = 0.0
+                self.cmd_vel_pub.publish(twist)
+                
+                total_turn = self.normalize_angle(current_heading - start_heading)
+                self.get_logger().info(f'Turn completed! Turned {math.degrees(total_turn):.1f}°')
+                self.get_logger().info(f'Final heading ({heading_source}): {math.degrees(current_heading):.1f}°')
+                
+                # Log final state
+                self.log_heading_state("TURN_COMPLETE")
+                break
             
-    #         derivative = (heading_error - last_error) / 0.05
-    #         last_error = heading_error
+            # Apply turning velocity (positive for left turn) - same bang-bang as original
+            if heading_error > 0:
+                twist.angular.z = self.turn_speed
+            else:
+                twist.angular.z = -self.turn_speed
             
-    #         # PID output
-    #         output = kp * heading_error + ki * integral + kd * derivative
+            twist.linear.x = 0.0  # No forward movement during turn
+            self.cmd_vel_pub.publish(twist)
             
-    #         # Rate limiting
-    #         if abs(output) < min_angular_velocity and abs(heading_error) > math.radians(0.5):
-    #             output = math.copysign(min_angular_velocity, output)
+            # Log progress
+            current_time = time.time()
+            if current_time - self.last_log_time > 0.5:
+                current_turn = self.normalize_angle(current_heading - start_heading)
+                self.get_logger().info(f'Turning... Current: {math.degrees(current_heading):.1f}°, '
+                                     f'Turned: {math.degrees(current_turn):.1f}°, '
+                                     f'Error: {math.degrees(heading_error):.1f}°')
+                self.last_log_time = current_time
             
-    #         output = max(min(output, max_angular_velocity), -max_angular_velocity)
-            
-    #         # Check if turn is complete (within tolerance)
-    #         if abs(heading_error) < math.radians(1.0):
-    #             settled_count += 1
-    #             if settled_count >= required_settled_readings:
-    #                 twist.angular.z = 0.0
-    #                 self.cmd_vel_pub.publish(twist)
-                    
-    #                 total_turn = self.normalize_angle(self.current_yaw - start_heading)
-    #                 self.get_logger().info(f'Turn completed! Turned {math.degrees(total_turn):.1f}°')
-    #                 self.get_logger().info(f'Final heading: {math.degrees(self.current_yaw):.1f}°')
-    #                 break
-    #         else:
-    #             settled_count = 0  # Reset if we're not within tolerance
-            
-    #         # Check for timeout
-    #         if time.time() - start_time > timeout:
-    #             twist.angular.z = 0.0
-    #             self.cmd_vel_pub.publish(twist)
-    #             self.get_logger().warn(f'Turn timeout! Best effort completed. Current heading: {math.degrees(self.current_yaw):.1f}°')
-    #             break
-            
-    #         # Apply turning velocity
-    #         twist.angular.z = -output  # Negative for right turn
-    #         twist.linear.x = 0.0  # No forward movement during turn
-    #         self.cmd_vel_pub.publish(twist)
-            
-    #         # Log progress
-    #         current_time = time.time()
-    #         if current_time - self.last_log_time > 0.5:
-    #             current_turn = self.normalize_angle(self.current_yaw - start_heading)
-    #             self.get_logger().info(f'Turning... Current: {math.degrees(self.current_yaw):.1f}°, '
-    #                                 f'Turned: {math.degrees(current_turn):.1f}°, '
-    #                                 f'Error: {math.degrees(heading_error):.1f}°')
-    #             self.last_log_time = current_time
-            
-    #         time.sleep(0.05)
+            time.sleep(0.05)
     
     def move_distance(self, distance, description=""):
-        """Move forward for a specific distance"""
+        """Move forward for a specific distance using IMU for heading correction"""
         if description:
             self.get_logger().info(f'Starting {description}: {distance:.2f}m')
         else:
             self.get_logger().info(f'Moving forward: {distance:.2f}m')
         
-        # Record starting position
+        # Log initial state before movement
+        self.log_heading_state("MOVE_START")
+        
+        # Record starting position and heading (use IMU if available)
         start_x = self.current_x
         start_y = self.current_y
-        target_heading = self.current_yaw  # Maintain current heading
+        target_heading = self.get_current_heading()  # Maintain current heading using IMU
+
+        self.get_logger().info(f'TARGET HEADING SET TO: {math.degrees(target_heading):.2f}° (from current heading)')
+        self.get_logger().info(f'This heading was captured at position: ({self.current_x:.3f}, {self.current_y:.3f})')
+
+        
+        heading_source = "IMU" if self.imu_received else "odometry"
+        self.get_logger().info(f'Using {heading_source} for heading correction during movement')
+        self.get_logger().info(f'Target heading for straight line: {math.degrees(target_heading):.2f}°')
         
         twist = Twist()
+        max_heading_error = 0.0  # Track maximum heading deviation
         
         while rclpy.ok():
-            # Process callbacks for fresh odometry
+            # Process callbacks for fresh odometry and IMU
             rclpy.spin_once(self, timeout_sec=0.01)
             
             # Calculate distance traveled
@@ -272,38 +396,80 @@ class PIDStraightLineController(Node):
                 twist.angular.z = 0.0
                 self.cmd_vel_pub.publish(twist)
                 self.get_logger().info(f'Distance completed: {distance_traveled:.3f}m')
+                self.get_logger().info(f'Maximum heading error during movement: {math.degrees(max_heading_error):.2f}°')
+                
+                # Log final state after movement
+                self.log_heading_state("MOVE_COMPLETE")
                 break
             
             # Set forward velocity
             twist.linear.x = self.forward_speed
             
-            # Heading correction to maintain straight line
-            heading_error = target_heading - self.current_yaw
+            # Heading correction to maintain straight line using IMU if available
+            current_heading = self.get_current_heading()
+            heading_error = target_heading - current_heading
             heading_error = self.normalize_angle(heading_error)
-            twist.angular.z = self.kp_heading * heading_error
+            
+            # Track maximum heading error
+            max_heading_error = max(max_heading_error, abs(heading_error))
+            
+            # Calculate angular correction
+            # IMU is mounted upside down - flip sign to correct for inverted yaw axis
+
+            angular_correction = -self.kp_heading * heading_error
+            twist.angular.z = angular_correction
             
             # Publish command
             self.cmd_vel_pub.publish(twist)
             
-            # Log progress
+            # Enhanced logging with heading information
             current_time = time.time()
             if current_time - self.last_log_time > 1.0:
-                self.get_logger().info(f'Distance: {distance_traveled:.3f}m / {distance:.3f}m')
+                progress_percent = min(100, (distance_traveled / distance) * 100)
+                
+                # Log progress with detailed heading info
+                log_msg = f'Distance: {distance_traveled:.3f}m / {distance:.3f}m ({progress_percent:.0f}%)'
+                log_msg += f' | Heading: Current={math.degrees(current_heading):.2f}°'
+                log_msg += f', Target={math.degrees(target_heading):.2f}°'
+                log_msg += f', Error={math.degrees(heading_error):.2f}°'
+                log_msg += f', Angular_Cmd={angular_correction:.3f}rad/s'
+                log_msg += f' | Max_Error={math.degrees(max_heading_error):.2f}°'
+                
+                self.get_logger().info(log_msg)
                 self.last_log_time = current_time
+
+            self.get_logger().info(f'PID Debug: Error={math.degrees(heading_error):.2f}°, '
+                      f'Correction={angular_correction:.3f}rad/s, '
+                      f'Expected_turn_direction={"LEFT" if angular_correction > 0 else "RIGHT"}')
+
             
             time.sleep(0.05)
     
     def execute_boustrophedon_pattern(self):
-        """Execute the complete boustrophedon pattern"""
+        """Execute the original simple boustrophedon pattern with IMU enhancement"""
         # Wait for first odometry message
-        self.get_logger().info('Waiting for odometry data...')
+        self.get_logger().info('Waiting for sensor data...')
         while not self.odom_received and rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.1)
+        
+        # Wait a bit for IMU if available
+        imu_wait_time = 0
+        while not self.imu_received and imu_wait_time < 20 and rclpy.ok():  # Wait up to 2 seconds for IMU
+            rclpy.spin_once(self, timeout_sec=0.1)
+            imu_wait_time += 1
+        
+        if self.imu_received:
+            self.get_logger().info('IMU data available - using IMU for precise heading control')
+        else:
+            self.get_logger().warn('IMU data not available - falling back to odometry for heading')
         
         if not rclpy.ok():
             return
         
-        self.get_logger().info('=== Starting Boustrophedon Pattern ===')
+        self.get_logger().info('=== Starting Original Boustrophedon Pattern with IMU Enhancement ===')
+        
+        # Log initial robot state
+        self.log_heading_state("PATTERN_START")
         
         # Step 1: Move forward the target distance
         self.get_logger().info('STEP 1: Forward movement')
@@ -327,8 +493,102 @@ class PIDStraightLineController(Node):
         self.get_logger().info('STEP 4: Second right turn')
         self.turn_right_90_degrees()
         
-        self.get_logger().info('=== Boustrophedon Pattern Complete ===')
+        # Log final robot state
+        self.log_heading_state("PATTERN_COMPLETE")
+        
+        self.get_logger().info('=== Original Boustrophedon Pattern Complete ===')
         self.get_logger().info('Robot should now be facing opposite direction, offset by 20cm')
+    
+    def execute_complete_boustrophedon_pattern(self):
+        """Execute the complete room coverage boustrophedon pattern with IMU enhancement"""
+        # Wait for sensors
+        self.get_logger().info('Waiting for sensor data...')
+        while (not self.odom_received or not self.scan_received) and rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.1)
+        
+        # Wait a bit more for IMU if available
+        imu_wait_time = 0
+        while not self.imu_received and imu_wait_time < 20 and rclpy.ok():  # Wait up to 2 seconds for IMU
+            rclpy.spin_once(self, timeout_sec=0.1)
+            imu_wait_time += 1
+        
+        if self.imu_received:
+            self.get_logger().info('IMU data available - using IMU for precise heading control')
+        else:
+            self.get_logger().warn('IMU data not available - falling back to odometry for heading')
+        
+        if not rclpy.ok():
+            return
+        
+        # Calculate room dimensions
+        if not self.calculate_room_width():
+            self.get_logger().error('Failed to calculate room width, using default pattern')
+            self.columns_needed = 3  # Default fallback
+        
+        self.get_logger().info('=== Starting Complete Boustrophedon Coverage Pattern with IMU ===')
+        self.get_logger().info(f'Will execute {self.columns_needed} columns')
+        
+        # Log initial robot state
+        self.log_heading_state("COMPLETE_PATTERN_START")
+        
+        for column in range(self.columns_needed):
+            self.current_column = column
+            self.get_logger().info(f'=== COLUMN {column + 1}/{self.columns_needed} ===')
+            
+            # Log state at start of each column
+            self.log_heading_state(f"COLUMN_{column + 1}_START")
+            
+            # Step 1: Move forward the target distance
+            self.get_logger().info(f'STEP 1: Forward sweep (Column {column + 1})')
+            self.move_distance(self.target_distance, f"column {column + 1} forward sweep")
+            time.sleep(0.5)
+            
+            # Check if this is the last column
+            if column == self.columns_needed - 1:
+                self.get_logger().info('=== Final column completed ===')
+                break
+            
+            # Determine turn direction based on current pattern direction
+            if self.moving_right:
+                # Moving right: turn right, move offset, turn right
+                self.get_logger().info('STEP 2: Right turn (moving right pattern)')
+                self.turn_right_90_degrees()
+                time.sleep(0.5)
+                
+                self.get_logger().info('STEP 3: Offset movement')
+                self.move_distance(self.offset_distance, "offset movement")
+                time.sleep(0.5)
+                
+                self.get_logger().info('STEP 4: Right turn to face opposite direction')
+                self.turn_right_90_degrees()
+                time.sleep(0.5)
+            else:
+                # Moving left: turn left, move offset, turn left
+                self.get_logger().info('STEP 2: Left turn (moving left pattern)')
+                self.turn_left_90_degrees()
+                time.sleep(0.5)
+                
+                self.get_logger().info('STEP 3: Offset movement')
+                self.move_distance(self.offset_distance, "offset movement")
+                time.sleep(0.5)
+                
+                self.get_logger().info('STEP 4: Left turn to face opposite direction')
+                self.turn_left_90_degrees()
+                time.sleep(0.5)
+            
+            # Toggle direction for next column
+            self.moving_right = not self.moving_right
+            
+            # Log state at end of each column
+            self.log_heading_state(f"COLUMN_{column + 1}_COMPLETE")
+            self.get_logger().info(f'Column {column + 1} completed, now facing opposite direction')
+        
+        # Log final robot state
+        self.log_heading_state("COMPLETE_PATTERN_FINISHED")
+        
+        self.get_logger().info('=== Complete Boustrophedon Pattern Finished ===')
+        self.get_logger().info(f'Successfully cleaned {self.columns_needed} columns')
+        self.get_logger().info(f'Total area coverage: ~{self.columns_needed * self.offset_distance:.2f}m width × {self.target_distance:.2f}m length')
 
 
 def main(args=None):
@@ -337,7 +597,9 @@ def main(args=None):
     controller = PIDStraightLineController()
     
     try:
-        controller.execute_boustrophedon_pattern()
+        # You can choose which pattern to execute:
+        # controller.execute_boustrophedon_pattern()  # Original simple pattern
+        controller.execute_complete_boustrophedon_pattern()  # Full room coverage
         controller.get_logger().info('Pattern completed successfully!')
         
     except KeyboardInterrupt:
