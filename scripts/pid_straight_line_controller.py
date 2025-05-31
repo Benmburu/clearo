@@ -25,6 +25,10 @@ class PIDStraightLineController(Node):
         self.declare_parameter('turn_speed', 0.1)  # Angular velocity for turns
         self.declare_parameter('offset_distance', 0.2)  # 20cm offset
         self.declare_parameter('safety_margin', 0.15)  # 15cm safety margin from walls
+
+        # NEW: Simple obstacle detection variables
+        self.obstacle_ahead = False
+        self.obstacle_distance = float('inf')
         
         self.target_distance = self.get_parameter('target_distance').value
         self.forward_speed = self.get_parameter('forward_speed').value
@@ -102,6 +106,288 @@ class PIDStraightLineController(Node):
         if not self.scan_received:
             self.scan_received = True
             self.get_logger().info('LIDAR scan data received')
+        # NEW: Just store the scan for obstacle checking
+        self.check_path_obstacles()
+
+    def test_lidar_orientation(self):
+        """Test function to understand LIDAR orientation"""
+        if self.latest_scan is None:
+            self.get_logger().warn('No LIDAR data for orientation test')
+            return
+        
+        ranges = np.array(self.latest_scan.ranges)
+        angle_min = self.latest_scan.angle_min
+        angle_increment = self.latest_scan.angle_increment
+        
+        self.get_logger().info('=== LIDAR ORIENTATION TEST ===')
+        self.get_logger().info(f'Total LIDAR beams: {len(ranges)}')
+        self.get_logger().info(f'Angle range: {math.degrees(angle_min):.1f}° to {math.degrees(angle_min + len(ranges) * angle_increment):.1f}°')
+        
+        # Find closest obstacle in each direction
+        directions = {
+            'FRONT (0°)': (-math.pi/12, math.pi/12),
+            'RIGHT (-90°)': (-math.pi/2 - math.pi/12, -math.pi/2 + math.pi/12),
+            'BACK (±180°)': (math.pi - math.pi/12, math.pi),
+            'LEFT (90°)': (math.pi/2 - math.pi/12, math.pi/2 + math.pi/12)
+        }
+        
+        for direction_name, (min_angle, max_angle) in directions.items():
+            sector_distances = []
+            for i, range_val in enumerate(ranges):
+                angle = angle_min + i * angle_increment
+                angle = self.normalize_angle(angle)
+                
+                if (min_angle <= angle <= max_angle and 
+                    self.latest_scan.range_min <= range_val <= 3.0):
+                    sector_distances.append(range_val)
+            
+            if sector_distances:
+                closest = min(sector_distances)
+                self.get_logger().info(f'{direction_name}: closest obstacle at {closest:.2f}m')
+            else:
+                self.get_logger().info(f'{direction_name}: no obstacles detected')
+
+    def log_lidar_debug(self):
+        """Log LIDAR data for debugging obstacle detection"""
+        if self.latest_scan is None:
+            return
+        
+        ranges = np.array(self.latest_scan.ranges)
+        angle_min = self.latest_scan.angle_min
+        angle_increment = self.latest_scan.angle_increment
+        
+        # Log readings in different sectors
+        sectors = {
+            'FRONT': (-math.pi/12, math.pi/12),      # ±15 degrees
+            'LEFT': (math.pi/3, 2*math.pi/3),       # 60-120 degrees  
+            'BACK': (2*math.pi/3, math.pi),         # 120-180 degrees
+            'RIGHT': (-2*math.pi/3, -math.pi/3)     # -120 to -60 degrees
+        }
+        
+        for sector_name, (min_angle, max_angle) in sectors.items():
+            sector_ranges = []
+            for i, range_val in enumerate(ranges):
+                angle = angle_min + i * angle_increment
+                angle = self.normalize_angle(angle)
+                
+                if (min_angle <= angle <= max_angle and 
+                    self.latest_scan.range_min <= range_val <= self.latest_scan.range_max):
+                    sector_ranges.append(range_val)
+            
+            if sector_ranges:
+                min_dist = min(sector_ranges)
+                avg_dist = sum(sector_ranges) / len(sector_ranges)
+                self.get_logger().info(f'{sector_name}: min={min_dist:.2f}m, avg={avg_dist:.2f}m, readings={len(sector_ranges)}')
+
+    # def check_path_obstacles(self):
+    #     """Simple obstacle detection in forward path"""
+    #     if self.latest_scan is None:
+    #         self.obstacle_ahead = False
+    #         return
+        
+    #     ranges = np.array(self.latest_scan.ranges)
+    #     angle_min = self.latest_scan.angle_min
+    #     angle_increment = self.latest_scan.angle_increment
+        
+    #     # Check forward sector (±15 degrees)
+    #     forward_angles = []
+    #     forward_ranges = []
+    #     forward_indices = []  # Track which LIDAR beam indices
+        
+    #     for i, range_val in enumerate(ranges):
+    #         # NEW: Rotate the map 180 degrees by adding π to the angle
+    #         angle = angle_min + i * angle_increment + math.pi
+    #         angle = self.normalize_angle(angle)  # Keep angle in [-π, π] range
+            
+    #         if (-math.pi/12 <= angle <= math.pi/12 and  # ±15 degrees
+    #             self.latest_scan.range_min <= range_val <= 2.0):  # Within 2m
+    #             forward_angles.append(angle)
+    #             forward_ranges.append(range_val)
+        
+    #     if forward_ranges:
+    #         self.obstacle_distance = min(forward_ranges)
+
+    #         # NEW: Find the index of the closest reading
+    #         min_distance_idx = forward_ranges.index(self.obstacle_distance)
+    #         closest_beam_idx = forward_indices[min_distance_idx]
+    #         closest_angle = forward_angles[min_distance_idx]
+
+    #         self.obstacle_ahead = self.obstacle_distance < 0.4  # Obstacle within 1.2m
+
+    #         self.get_logger().info(f'OBSTACLE DETECTED:')
+    #     self.get_logger().info(f'  Distance: {self.obstacle_distance:.2f}m')
+    #     self.get_logger().info(f'  LIDAR beam index: {closest_beam_idx} (out of {len(ranges)} total beams)')
+    #     self.get_logger().info(f'  Beam angle: {math.degrees(closest_angle):.1f}° (0° = robot front)')
+    #     self.get_logger().info(f'  Total forward readings: {len(forward_ranges)}')
+        
+    #     # NEW: Also check what's at the back (180°) for comparison
+    #     back_ranges = []
+    #     for i, range_val in enumerate(ranges):
+    #         angle = angle_min + i * angle_increment
+    #         angle = self.normalize_angle(angle)
+    #         # Check back sector (±15 degrees around 180°)
+    #         if ((math.pi - math.pi/12) <= abs(angle) <= math.pi and  
+    #             self.latest_scan.range_min <= range_val <= 2.0):
+    #             back_ranges.append(range_val)
+        
+    #     if back_ranges:
+    #         back_distance = min(back_ranges)
+    #         self.get_logger().info(f'  For comparison - Back distance: {back_distance:.2f}m')
+            
+    #     else:
+    #         self.obstacle_ahead = False
+    #         # NEW: Log when no obstacles detected
+    #         current_time = time.time()
+    #         if not hasattr(self, 'last_no_obstacle_log'):
+    #             self.last_no_obstacle_log = 0
+    #         if current_time - self.last_no_obstacle_log > 2.0:  # Log every 2 seconds
+    #             self.get_logger().info('No obstacles detected in forward path')
+    #             self.last_no_obstacle_log = current_time
+
+    def check_path_obstacles(self):
+        """Simple obstacle detection in forward path with detailed debugging"""
+        if self.latest_scan is None:
+            self.obstacle_ahead = False
+            return
+        
+        ranges = np.array(self.latest_scan.ranges)
+        angle_min = self.latest_scan.angle_min
+        angle_increment = self.latest_scan.angle_increment
+        
+        # Check forward sector (±15 degrees) - angle 0 should be robot's front
+        forward_angles = []
+        forward_ranges = []
+        forward_indices = []  # Track which LIDAR beam indices
+        
+        for i, range_val in enumerate(ranges):
+            angle = angle_min + i * angle_increment + math.pi  # ADD 180° rotation back
+            angle = self.normalize_angle(angle)
+            
+            if (-math.pi/12 <= angle <= math.pi/12 and  # ±15 degrees
+                self.latest_scan.range_min <= range_val <= 2.0):
+                forward_angles.append(angle)
+                forward_ranges.append(range_val)
+                forward_indices.append(i)  # Store beam index
+        
+        if forward_ranges:
+            self.obstacle_distance = min(forward_ranges)
+            
+            # NEW: Find the index of the closest reading
+            min_distance_idx = forward_ranges.index(self.obstacle_distance)
+            closest_beam_idx = forward_indices[min_distance_idx]
+            closest_angle = forward_angles[min_distance_idx]
+            
+            self.obstacle_ahead = self.obstacle_distance < 0.4
+            
+            # Detailed logging
+            self.get_logger().info(f'OBSTACLE DETECTED:')
+            self.get_logger().info(f'  Distance: {self.obstacle_distance:.2f}m')
+            self.get_logger().info(f'  LIDAR beam index: {closest_beam_idx} (out of {len(ranges)} total beams)')
+            self.get_logger().info(f'  Beam angle: {math.degrees(closest_angle):.1f}° (0° = robot front)')
+            self.get_logger().info(f'  Total forward readings: {len(forward_ranges)}')
+            
+            # Also check what's at the back (180°) for comparison
+            back_ranges = []
+            for i, range_val in enumerate(ranges):
+                angle = angle_min + i * angle_increment
+                angle = self.normalize_angle(angle)
+                # Check back sector (±15 degrees around 180°)
+                if ((math.pi - math.pi/12) <= abs(angle) <= math.pi and  
+                    self.latest_scan.range_min <= range_val <= 2.0):
+                    back_ranges.append(range_val)
+            
+            if back_ranges:
+                back_distance = min(back_ranges)
+                self.get_logger().info(f'  For comparison - Back distance: {back_distance:.2f}m')
+            
+        else:
+            self.obstacle_ahead = False      
+
+    # def check_path_obstacles(self):
+    #     """Simple obstacle detection in forward path"""
+    #     if self.latest_scan is None:
+    #         self.obstacle_ahead = False
+    #         return
+        
+    #     ranges = np.array(self.latest_scan.ranges)
+    #     angle_min = self.latest_scan.angle_min
+    #     angle_increment = self.latest_scan.angle_increment
+        
+    #     # Check forward sector (±15 degrees)
+    #     forward_angles = []
+    #     forward_ranges = []
+        
+    #     for i, range_val in enumerate(ranges):
+    #         # REMOVE THIS LINE: angle = angle_min + i * angle_increment + math.pi
+    #         angle = angle_min + i * angle_increment  # Use normal angle without rotation
+    #         angle = self.normalize_angle(angle)  # Keep angle in [-π, π] range
+            
+    #         if (-math.pi/12 <= angle <= math.pi/12 and  # ±15 degrees
+    #             self.latest_scan.range_min <= range_val <= 2.0):  # Within 2m
+    #             forward_angles.append(angle)
+    #             forward_ranges.append(range_val)
+        
+    #     if forward_ranges:
+    #         self.obstacle_distance = min(forward_ranges)
+    #         self.obstacle_ahead = self.obstacle_distance < 0.4  # Obstacle within 40cm
+            
+    #         # NEW: Log obstacle detection details
+    #         self.get_logger().info(f'OBSTACLE DETECTED: Distance={self.obstacle_distance:.2f}m, '
+    #                             f'Readings in forward sector: {len(forward_ranges)}, '
+    #                             f'Closest reading: {min(forward_ranges):.2f}m')
+    #     else:
+    #         self.obstacle_ahead = False
+    #         # NEW: Log when no obstacles detected
+    #         current_time = time.time()
+    #         if not hasattr(self, 'last_no_obstacle_log'):
+    #             self.last_no_obstacle_log = 0
+    #         if current_time - self.last_no_obstacle_log > 2.0:  # Log every 2 seconds
+    #             self.get_logger().info('No obstacles detected in forward path')
+    #             self.last_no_obstacle_log = current_time
+    
+    def navigate_around_obstacle(self, original_distance):
+        """Navigate around obstacle using rectangular path with existing functions"""
+        self.get_logger().info(f'Obstacle at {self.obstacle_distance:.2f}m - executing rectangular avoidance')
+        # NEW: Detailed logging at start
+        self.get_logger().info('=== OBSTACLE AVOIDANCE TRIGGERED ===')
+        self.get_logger().info(f'Obstacle distance: {self.obstacle_distance:.2f}m')
+        self.get_logger().info(f'Original planned distance: {original_distance:.2f}m')
+        self.get_logger().info(f'Current position: ({self.current_x:.2f}, {self.current_y:.2f})')
+
+        # Step 1: Approach obstacle closer (stop 15cm before)
+        approach_distance = max(0.05, self.obstacle_distance - 0.15)  # Stop 15cm before
+        if approach_distance > 0.05:
+            self.move_distance(approach_distance, "approaching obstacle")
+        
+        # Step 2: Turn 90° left
+        self.turn_left_90_degrees()
+        
+        # Step 3: Move sideways to clear obstacle
+        sideways_distance = 0.5  # 50cm sideways
+        self.move_distance(sideways_distance, "moving sideways around obstacle")
+        
+        # Step 4: Turn 90° right (back to original heading)
+        self.turn_right_90_degrees()
+        
+        # Step 5: Move forward past obstacle
+        forward_distance = 0.8  # 80cm forward past obstacle
+        self.move_distance(forward_distance, "moving past obstacle")
+        
+        # Step 6: Turn 90° right (toward original path)
+        self.turn_right_90_degrees()
+        
+        # Step 7: Return to original path
+        return_distance = sideways_distance  # Return same distance we moved sideways
+        self.move_distance(return_distance, "returning to original path")
+        
+        # Step 8: Turn 90° left (back to original heading)
+        self.turn_left_90_degrees()
+        
+        # Step 9: Continue with remaining distance
+        total_avoidance_forward = approach_distance + forward_distance
+        remaining_distance = original_distance - total_avoidance_forward
+        if remaining_distance > 0.05:
+            self.move_distance(remaining_distance, "completing original distance")
     
     def calculate_room_width(self):
         """Calculate room width using LIDAR data"""
@@ -356,6 +642,14 @@ class PIDStraightLineController(Node):
     
     def move_distance(self, distance, description=""):
         """Move forward for a specific distance using IMU for heading correction"""
+
+        # NEW: Check for obstacles first
+        if hasattr(self, 'obstacle_ahead') and self.obstacle_ahead and distance > 0.5:
+            self.get_logger().info('=== OBSTACLE AVOIDANCE DEBUG ===')
+            self.log_lidar_debug()  # NEW: Log LIDAR sectors
+            self.navigate_around_obstacle(distance)
+            return
+    
         if description:
             self.get_logger().info(f'Starting {description}: {distance:.2f}m')
         else:
@@ -595,6 +889,9 @@ def main(args=None):
     rclpy.init(args=args)
     
     controller = PIDStraightLineController()
+
+    controller.test_lidar_orientation()
+    time.sleep(2)  # Give time to read the logs
     
     try:
         # You can choose which pattern to execute:
