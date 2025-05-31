@@ -38,10 +38,6 @@ install(PROGRAMS
   scripts/pid_controller_visual.py
   scripts/mpu6050_node.py
   scripts/calibrate_mpu6050.py
-  scripts/boustrophedon_controller.py
-  scripts/base_robot_controller.py
-  scripts/movement_controller.py
-  scripts/turn_controller.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
