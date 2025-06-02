@@ -183,319 +183,6 @@ class PIDStraightLineController(Node):
                 avg_dist = sum(sector_ranges) / len(sector_ranges)
                 self.get_logger().info(f'{sector_name}: min={min_dist:.2f}m, avg={avg_dist:.2f}m, readings={len(sector_ranges)}')
 
-    # def check_path_obstacles(self):
-    #     """Simple obstacle detection in forward path with detailed debugging"""
-    #     if self.latest_scan is None:
-    #         self.obstacle_ahead = False
-    #         return
-        
-    #     ranges = np.array(self.latest_scan.ranges)
-    #     angle_min = self.latest_scan.angle_min
-    #     angle_increment = self.latest_scan.angle_increment
-        
-    #     # Check forward sector (±15 degrees) - angle 0 should be robot's front
-    #     forward_angles = []
-    #     forward_ranges = []
-    #     forward_indices = []  # Track which LIDAR beam indices
-        
-    #     for i, range_val in enumerate(ranges):
-    #         angle = angle_min + i * angle_increment + math.pi  # ADD 180° rotation back
-    #         angle = self.normalize_angle(angle)
-            
-    #         if (-math.pi/12 <= angle <= math.pi/12 and  # ±15 degrees
-    #             self.latest_scan.range_min <= range_val <= 2.0):
-    #             forward_angles.append(angle)
-    #             forward_ranges.append(range_val)
-    #             forward_indices.append(i)  # Store beam index
-        
-    #     if forward_ranges:
-    #         self.obstacle_distance = min(forward_ranges)
-            
-    #         # NEW: Find the index of the closest reading
-    #         min_distance_idx = forward_ranges.index(self.obstacle_distance)
-    #         closest_beam_idx = forward_indices[min_distance_idx]
-    #         closest_angle = forward_angles[min_distance_idx]
-            
-    #         self.obstacle_ahead = self.obstacle_distance < 0.4
-            
-    #         # Detailed logging
-    #         self.get_logger().info(f'OBSTACLE DETECTED:')
-    #         self.get_logger().info(f'  Distance: {self.obstacle_distance:.2f}m')
-    #         self.get_logger().info(f'  LIDAR beam index: {closest_beam_idx} (out of {len(ranges)} total beams)')
-    #         self.get_logger().info(f'  Beam angle: {math.degrees(closest_angle):.1f}° (0° = robot front)')
-    #         self.get_logger().info(f'  Total forward readings: {len(forward_ranges)}')
-            
-    #         # Also check what's at the back (180°) for comparison
-    #         back_ranges = []
-    #         for i, range_val in enumerate(ranges):
-    #             angle = angle_min + i * angle_increment
-    #             angle = self.normalize_angle(angle)
-    #             # Check back sector (±15 degrees around 180°)
-    #             if ((math.pi - math.pi/12) <= abs(angle) <= math.pi and  
-    #                 self.latest_scan.range_min <= range_val <= 2.0):
-    #                 back_ranges.append(range_val)
-            
-    #         if back_ranges:
-    #             back_distance = min(back_ranges)
-    #             self.get_logger().info(f'  For comparison - Back distance: {back_distance:.2f}m')
-            
-    #     else:
-    #         self.obstacle_ahead = False      
-
-    # def check_path_obstacles(self):
-    #     """Check obstacles in all directions with LIDAR mounting offset correction"""
-    #     if self.latest_scan is None:
-    #         self.obstacle_ahead = False
-    #         return
-        
-    #     ranges = np.array(self.latest_scan.ranges)
-    #     angle_min = self.latest_scan.angle_min
-    #     angle_increment = self.latest_scan.angle_increment
-        
-    #     # Robot dimensions and LIDAR mounting position
-    #     ROBOT_LENGTH = 0.304  # 30.4cm in meters
-    #     LIDAR_OFFSET_FROM_FRONT = ROBOT_LENGTH / 2  # 15.2cm - LIDAR is center-mounted
-    #     LIDAR_OFFSET_FROM_BACK = ROBOT_LENGTH / 2   # 15.2cm - same distance to back
-    #     LIDAR_OFFSET_FROM_SIDES = 0.152  # Assuming robot width is also 30.4cm and LIDAR is centered
-        
-    #     # Define sectors for each direction (±15 degrees each)
-    #     sectors = {
-    #         'FRONT': (-math.pi/12, math.pi/12),           # ±15° around 0°
-    #         'RIGHT': (-math.pi/2 - math.pi/12, -math.pi/2 + math.pi/12),  # ±15° around -90°
-    #         'BACK': (math.pi - math.pi/12, math.pi + math.pi/12),          # ±15° around 180°
-    #         'LEFT': (math.pi/2 - math.pi/12, math.pi/2 + math.pi/12)       # ±15° around 90°
-    #     }
-        
-    #     # Check each direction and apply appropriate offset correction
-    #     direction_results = {}
-        
-    #     for direction_name, (min_angle, max_angle) in sectors.items():
-    #         sector_ranges = []
-    #         sector_angles = []
-    #         sector_indices = []
-            
-    #         for i, range_val in enumerate(ranges):
-    #             # Apply your LIDAR rotation (because it's mounted backwards)
-    #             angle = angle_min + i * angle_increment + math.pi
-    #             angle = self.normalize_angle(angle)
-                
-    #             # Check if angle is in this sector and range is valid
-    #             if (min_angle <= angle <= max_angle and 
-    #                 self.latest_scan.range_min <= range_val <= 3.0):
-    #                 sector_ranges.append(range_val)
-    #                 sector_angles.append(angle)
-    #                 sector_indices.append(i)
-            
-    #         # Store results for this direction with offset correction
-    #         if sector_ranges:
-    #             raw_distance = min(sector_ranges)
-    #             min_idx = sector_ranges.index(raw_distance)
-                
-    #             # Apply offset correction based on direction
-    #             if direction_name == 'FRONT':
-    #                 corrected_distance = raw_distance - LIDAR_OFFSET_FROM_FRONT
-    #             elif direction_name == 'BACK':
-    #                 corrected_distance = raw_distance - LIDAR_OFFSET_FROM_BACK
-    #             elif direction_name in ['LEFT', 'RIGHT']:
-    #                 corrected_distance = raw_distance - LIDAR_OFFSET_FROM_SIDES
-                
-    #             direction_results[direction_name] = {
-    #                 'raw_distance': raw_distance,
-    #                 'corrected_distance': corrected_distance,
-    #                 'angle': sector_angles[min_idx],
-    #                 'beam_index': sector_indices[min_idx],
-    #                 'readings_count': len(sector_ranges)
-    #             }
-    #         else:
-    #             direction_results[direction_name] = None
-        
-    #     # Log results for all directions with both raw and corrected distances
-    #     self.get_logger().info('=== LIDAR SCAN WITH OFFSET CORRECTION ===')
-    #     self.get_logger().info(f'Robot length: {ROBOT_LENGTH*100:.1f}cm, LIDAR offset from front: {LIDAR_OFFSET_FROM_FRONT*100:.1f}cm')
-        
-    #     for direction in ['FRONT', 'RIGHT', 'BACK', 'LEFT']:
-    #         if direction_results[direction]:
-    #             result = direction_results[direction]
-    #             self.get_logger().info(
-    #                 f'{direction:5}: Raw={result["raw_distance"]:.2f}m → Corrected={result["corrected_distance"]:.2f}m '
-    #                 f'| beam {result["beam_index"]:3d} (angle: {math.degrees(result["angle"]):6.1f}°)'
-    #             )
-    #         else:
-    #             self.get_logger().info(f'{direction:5}: NO OBSTACLES detected')
-        
-    #     # Set obstacle detection based on CORRECTED front distance
-    #     if direction_results['FRONT']:
-    #         self.obstacle_distance = direction_results['FRONT']['corrected_distance']
-    #         # Use corrected distance for obstacle detection
-    #         self.obstacle_ahead = self.obstacle_distance < 0.40  # Now this should be actual clearance from robot edge
-            
-    #         self.get_logger().info(f'OBSTACLE DETECTION:')
-    #         self.get_logger().info(f'  Raw LIDAR reading: {direction_results["FRONT"]["raw_distance"]:.2f}m')
-    #         self.get_logger().info(f'  Actual robot clearance: {self.obstacle_distance:.2f}m')
-    #         self.get_logger().info(f'  Obstacle ahead: {self.obstacle_ahead}')
-    #     else:
-    #         self.obstacle_ahead = False
-    #         self.obstacle_distance = float('inf')
-    #         self.get_logger().info('NO OBSTACLE AHEAD detected')
-        
-    #     # Add separator for readability
-    #     self.get_logger().info('=' * 70)
-
-    # def check_path_obstacles(self):
-    #     """Check obstacles in all directions with enhanced diagnostics"""
-    #     if self.latest_scan is None:
-    #         self.obstacle_ahead = False
-    #         return
-        
-    #     ranges = np.array(self.latest_scan.ranges)
-    #     angle_min = self.latest_scan.angle_min
-    #     angle_increment = self.latest_scan.angle_increment
-        
-    #     # Robot dimensions and LIDAR mounting position
-    #     ROBOT_LENGTH = 0.304  # 30.4cm in meters
-    #     LIDAR_OFFSET_FROM_FRONT = ROBOT_LENGTH / 2  # 15.2cm - LIDAR is center-mounted
-    #     LIDAR_OFFSET_FROM_BACK = ROBOT_LENGTH / 2   # 15.2cm - same distance to back
-    #     LIDAR_OFFSET_FROM_SIDES = 0.152  # Assuming robot width is also 30.4cm and LIDAR is centered
-        
-    #     # Define sectors for each direction (±15 degrees each)
-    #     sectors = {
-    #         'FRONT': (-math.pi/12, math.pi/12),           # ±15° around 0°
-    #         'RIGHT': (-math.pi/2 - math.pi/12, -math.pi/2 + math.pi/12),  # ±15° around -90°
-    #         'BACK': (math.pi - math.pi/12, math.pi + math.pi/12),          # ±15° around 180°
-    #         'LEFT': (math.pi/2 - math.pi/12, math.pi/2 + math.pi/12)       # ±15° around 90°
-    #     }
-        
-    #     # NEW: Also check wider front sector for comparison
-    #     wide_front_sector = (-math.pi/6, math.pi/6)  # ±30° around 0°
-        
-    #     # Check each direction and apply appropriate offset correction
-    #     direction_results = {}
-        
-    #     for direction_name, (min_angle, max_angle) in sectors.items():
-    #         sector_ranges = []
-    #         sector_angles = []
-    #         sector_indices = []
-            
-    #         for i, range_val in enumerate(ranges):
-    #             # Apply your LIDAR rotation (because it's mounted backwards)
-    #             angle = angle_min + i * angle_increment + math.pi
-    #             angle = self.normalize_angle(angle)
-                
-    #             # Check if angle is in this sector and range is valid
-    #             if (min_angle <= angle <= max_angle and 
-    #                 self.latest_scan.range_min <= range_val <= 3.0):
-    #                 sector_ranges.append(range_val)
-    #                 sector_angles.append(angle)
-    #                 sector_indices.append(i)
-            
-    #         # Store results for this direction with offset correction
-    #         if sector_ranges:
-    #             raw_distance = min(sector_ranges)
-    #             min_idx = sector_ranges.index(raw_distance)
-                
-    #             # Apply offset correction based on direction
-    #             if direction_name == 'FRONT':
-    #                 corrected_distance = raw_distance - LIDAR_OFFSET_FROM_FRONT
-    #             elif direction_name == 'BACK':
-    #                 corrected_distance = raw_distance - LIDAR_OFFSET_FROM_BACK
-    #             elif direction_name in ['LEFT', 'RIGHT']:
-    #                 corrected_distance = raw_distance - LIDAR_OFFSET_FROM_SIDES
-                
-    #             direction_results[direction_name] = {
-    #                 'raw_distance': raw_distance,
-    #                 'corrected_distance': corrected_distance,
-    #                 'angle': sector_angles[min_idx],
-    #                 'beam_index': sector_indices[min_idx],
-    #                 'readings_count': len(sector_ranges),
-    #                 'all_ranges': sector_ranges[:5],  # First 5 readings for analysis
-    #                 'all_angles': [math.degrees(a) for a in sector_angles[:5]]
-    #             }
-    #         else:
-    #             direction_results[direction_name] = None
-        
-    #     # NEW: Check wide front sector for comparison
-    #     wide_front_ranges = []
-    #     wide_front_data = []
-    #     for i, range_val in enumerate(ranges):
-    #         angle = angle_min + i * angle_increment + math.pi
-    #         angle = self.normalize_angle(angle)
-            
-    #         if (wide_front_sector[0] <= angle <= wide_front_sector[1] and 
-    #             self.latest_scan.range_min <= range_val <= 3.0):
-    #             wide_front_ranges.append(range_val)
-    #             wide_front_data.append({
-    #                 'range': range_val,
-    #                 'angle': math.degrees(angle),
-    #                 'beam_index': i
-    #             })
-        
-    #     # Log results for all directions with both raw and corrected distances
-    #     self.get_logger().info('=== ENHANCED LIDAR SCAN DIAGNOSTICS ===')
-    #     self.get_logger().info(f'Robot length: {ROBOT_LENGTH*100:.1f}cm, LIDAR offset from front: {LIDAR_OFFSET_FROM_FRONT*100:.1f}cm')
-    #     self.get_logger().info(f'Total LIDAR beams: {len(ranges)}, Valid readings: {np.sum(np.isfinite(ranges))}')
-        
-    #     for direction in ['FRONT', 'RIGHT', 'BACK', 'LEFT']:
-    #         if direction_results[direction]:
-    #             result = direction_results[direction]
-    #             self.get_logger().info(
-    #                 f'{direction:5}: Raw={result["raw_distance"]:.2f}m → Corrected={result["corrected_distance"]:.2f}m '
-    #                 f'| beam {result["beam_index"]:3d} (angle: {math.degrees(result["angle"]):6.1f}°) '
-    #                 f'| {result["readings_count"]} readings'
-    #             )
-                
-    #             # NEW: Show multiple readings in front sector for analysis
-    #             if direction == 'FRONT' and len(result["all_ranges"]) > 1:
-    #                 self.get_logger().info(f'      Front sector details:')
-    #                 for j, (r, a) in enumerate(zip(result["all_ranges"], result["all_angles"])):
-    #                     self.get_logger().info(f'        Reading {j+1}: {r:.3f}m at {a:.1f}°')
-    #         else:
-    #             self.get_logger().info(f'{direction:5}: NO OBSTACLES detected')
-        
-    #     # NEW: Wide front sector analysis
-    #     if wide_front_ranges:
-    #         min_wide = min(wide_front_ranges)
-    #         self.get_logger().info(f'WIDE FRONT SECTOR (±30°): Min={min_wide:.3f}m from {len(wide_front_ranges)} readings')
-    #         # Show closest 3 readings
-    #         sorted_data = sorted(wide_front_data, key=lambda x: x['range'])[:3]
-    #         for i, data in enumerate(sorted_data):
-    #             self.get_logger().info(f'  #{i+1}: {data["range"]:.3f}m at {data["angle"]:.1f}° (beam {data["beam_index"]})')
-        
-    #     # NEW: Check for potential beam angle issues
-    #     if direction_results['FRONT']:
-    #         front_angle = math.degrees(direction_results['FRONT']['angle'])
-    #         if abs(front_angle) > 10:  # More than 10° off center
-    #             self.get_logger().warn(f'WARNING: Front obstacle detected at {front_angle:.1f}° - may be edge detection')
-        
-    #     # Set obstacle detection based on CORRECTED front distance
-    #     if direction_results['FRONT']:
-    #         self.obstacle_distance = direction_results['FRONT']['corrected_distance']
-    #         # Use corrected distance for obstacle detection
-    #         self.obstacle_ahead = self.obstacle_distance < 0.20  # Now this should be actual clearance from robot edge
-            
-    #         self.get_logger().info(f'OBSTACLE DETECTION DECISION:')
-    #         self.get_logger().info(f'  Raw LIDAR reading: {direction_results["FRONT"]["raw_distance"]:.3f}m')
-    #         self.get_logger().info(f'  Actual robot clearance: {self.obstacle_distance:.3f}m')
-    #         self.get_logger().info(f'  Detection threshold: 0.150m')
-    #         self.get_logger().info(f'  Obstacle ahead: {self.obstacle_ahead}')
-            
-    #         # NEW: Add context about the decision
-    #         if not self.obstacle_ahead and self.obstacle_distance < 0.30:
-    #             self.get_logger().warn(f'CAUTION: Close obstacle ({self.obstacle_distance:.3f}m) but not triggering avoidance')
-            
-    #     else:
-    #         self.obstacle_ahead = False
-    #         self.obstacle_distance = float('inf')
-    #         self.get_logger().info('NO OBSTACLE AHEAD detected in narrow front sector')
-        
-    #     # NEW: Cross-check with wide sector
-    #     if wide_front_ranges and not self.obstacle_ahead:
-    #         wide_min_corrected = min(wide_front_ranges) - LIDAR_OFFSET_FROM_FRONT
-    #         if wide_min_corrected < 0.20:  # 20cm threshold for wide sector
-    #             self.get_logger().warn(f'DISCREPANCY: Wide sector shows obstacle at {wide_min_corrected:.3f}m but narrow sector says clear!')
-        
-    #     # Add separator for readability
-    #     self.get_logger().info('=' * 80)
-
     def log_raw_lidar_data(self):
         """Log raw LIDAR data around front sector for debugging"""
         if self.latest_scan is None:
@@ -542,8 +229,11 @@ class PIDStraightLineController(Node):
     def move_distance(self, distance, description="", skip_obstacle_avoidance=False):
         """Move forward for a specific distance with continuous obstacle monitoring"""
         
-        # Pre-movement obstacle check (only for regular movements, not during obstacle avoidance)
-        if not skip_obstacle_avoidance:
+        # Determine if this is a backward movement
+        is_backward_movement = distance < 0
+        
+        # Pre-movement obstacle check (only for forward movements, not during obstacle avoidance)
+        if not skip_obstacle_avoidance and not is_backward_movement:
             self.get_logger().info(f'=== PRE-MOVEMENT OBSTACLE CHECK ===')
             self.check_path_obstacles()
             
@@ -578,12 +268,17 @@ class PIDStraightLineController(Node):
                     self.get_logger().info(f'DECISION: Small distance ({distance:.3f}m), proceeding with caution')
 
         else:
-            self.get_logger().info(f'=== OBSTACLE AVOIDANCE MOVEMENT (skipping pre-check) ===')
+            if is_backward_movement:
+                self.get_logger().info(f'=== BACKWARD MOVEMENT (skipping obstacle checks) ===')
+            else:
+                self.get_logger().info(f'=== OBSTACLE AVOIDANCE MOVEMENT (skipping pre-check) ===')
 
         if description:
-            self.get_logger().info(f'Starting {description}: {distance:.2f}m')
+            direction = "backward" if is_backward_movement else "forward"
+            self.get_logger().info(f'Starting {description} ({direction}): {abs(distance):.2f}m')
         else:
-            self.get_logger().info(f'Moving forward: {distance:.2f}m')
+            direction = "backward" if is_backward_movement else "forward"
+            self.get_logger().info(f'Moving {direction}: {abs(distance):.2f}m')
         
         # Log initial state
         self.log_heading_state("MOVE_START")
@@ -600,7 +295,7 @@ class PIDStraightLineController(Node):
         loop_count = 0
         last_obstacle_check = 0
         
-        # NEW: Variables for continuous monitoring
+        # NEW: Variables for continuous monitoring (only for forward movement)
         previous_distances = []  # Track last few distance readings
         distance_trend_threshold = 5  # Number of readings to analyze
         early_warning_distance = 0.35  # Start slowing down at 35cm
@@ -609,23 +304,25 @@ class PIDStraightLineController(Node):
         while rclpy.ok():
             loop_count += 1
 
-            # Simple stuck detection
-            if loop_count > 50 and distance_traveled < 0.05:  # 50 loops with less than 5cm progress
-                if self.obstacle_ahead:
-                    current_clearance = getattr(self, 'obstacle_distance', float('inf'))
-                    if current_clearance < self.TARGET_APPROACH_CLEARANCE:
-                        self.get_logger().warn(f'ROBOT APPEARS STUCK: Backing up to create space')
-                        twist.linear.x = 0.0
-                        twist.angular.z = 0.0
-                        self.cmd_vel_pub.publish(twist)
-                        
-                        backup_distance = max(0.10, (self.TARGET_APPROACH_CLEARANCE - current_clearance) + 0.05)
-                        self.move_distance(-backup_distance, "stuck recovery backup", skip_obstacle_avoidance=True)
-                        
-                        remaining_distance = distance - distance_traveled
-                        if remaining_distance > 0.05:
-                            self.navigate_around_obstacle(remaining_distance)
-                        return
+            # Simple stuck detection (only for forward movement)
+            if not is_backward_movement and loop_count > 50:
+                distance_traveled = math.sqrt((self.current_x - start_x)**2 + (self.current_y - start_y)**2)
+                if distance_traveled < 0.05:  # 50 loops with less than 5cm progress
+                    if self.obstacle_ahead:
+                        current_clearance = getattr(self, 'obstacle_distance', float('inf'))
+                        if current_clearance < self.TARGET_APPROACH_CLEARANCE:
+                            self.get_logger().warn(f'ROBOT APPEARS STUCK: Backing up to create space')
+                            twist.linear.x = 0.0
+                            twist.angular.z = 0.0
+                            self.cmd_vel_pub.publish(twist)
+                            
+                            backup_distance = max(0.10, (self.TARGET_APPROACH_CLEARANCE - current_clearance) + 0.05)
+                            self.move_distance(-backup_distance, "stuck recovery backup", skip_obstacle_avoidance=True)
+                            
+                            remaining_distance = distance - distance_traveled
+                            if remaining_distance > 0.05:
+                                self.navigate_around_obstacle(remaining_distance)
+                            return
         
             current_time = time.time()
             
@@ -638,23 +335,24 @@ class PIDStraightLineController(Node):
                 (self.current_y - start_y)**2
             )
             
-            # ENHANCED OBSTACLE MONITORING - Check every loop, not just periodically
-            self.check_path_obstacles()
+            # ENHANCED OBSTACLE MONITORING - Only for forward movements
+            if not skip_obstacle_avoidance and not is_backward_movement:
+                self.check_path_obstacles()
             
-            # NEW: Track obstacle distance trend for predictive stopping
-            if hasattr(self, 'obstacle_distance') and self.obstacle_distance != float('inf'):
-                previous_distances.append(self.obstacle_distance)
-                if len(previous_distances) > distance_trend_threshold:
-                    previous_distances.pop(0)  # Keep only recent readings
-                
-                # Calculate trend (if distance is decreasing rapidly)
-                if len(previous_distances) >= 3:
-                    recent_change = previous_distances[-1] - previous_distances[-3]
-                    if recent_change < -0.05:  # Distance decreasing by 5cm over 3 readings
-                        self.get_logger().warn(f'RAPID APPROACH DETECTED: Distance decreased by {-recent_change*100:.1f}cm in 3 readings')
+                # NEW: Track obstacle distance trend for predictive stopping
+                if hasattr(self, 'obstacle_distance') and self.obstacle_distance != float('inf'):
+                    previous_distances.append(self.obstacle_distance)
+                    if len(previous_distances) > distance_trend_threshold:
+                        previous_distances.pop(0)  # Keep only recent readings
+                    
+                    # Calculate trend (if distance is decreasing rapidly)
+                    if len(previous_distances) >= 3:
+                        recent_change = previous_distances[-1] - previous_distances[-3]
+                        if recent_change < -0.05:  # Distance decreasing by 5cm over 3 readings
+                            self.get_logger().warn(f'RAPID APPROACH DETECTED: Distance decreased by {-recent_change*100:.1f}cm in 3 readings')
             
-            # NEW: Multi-level obstacle response
-            if self.obstacle_ahead:
+            # NEW: Multi-level obstacle response (only for forward movement)
+            if not is_backward_movement and not skip_obstacle_avoidance and self.obstacle_ahead:
                 current_clearance = getattr(self, 'obstacle_distance', float('inf'))
                 
                 self.get_logger().info(f'=== OBSTACLE DETECTED DURING MOVEMENT ===')
@@ -707,11 +405,14 @@ class PIDStraightLineController(Node):
                     self.get_logger().info(f'OBSTACLE MONITORING: Clearance {current_clearance:.3f}m - continuing')
                     twist.linear.x = self.forward_speed
             else:
-                # No obstacle - normal speed
-                twist.linear.x = self.forward_speed
+                # No obstacle or backward movement - set appropriate speed
+                if is_backward_movement:
+                    twist.linear.x = -self.forward_speed  # Negative speed for backward
+                else:
+                    twist.linear.x = self.forward_speed   # Positive speed for forward
             
             # Check if target distance reached
-            if distance_traveled >= distance:
+            if abs(distance_traveled) >= abs(distance):
                 twist.linear.x = 0.0
                 twist.angular.z = 0.0
                 self.cmd_vel_pub.publish(twist)
@@ -734,13 +435,14 @@ class PIDStraightLineController(Node):
             
             # Enhanced logging
             if current_time - self.last_log_time > 1.0:
-                progress_percent = min(100, (distance_traveled / distance) * 100)
+                progress_percent = min(100, (distance_traveled / abs(distance)) * 100)
                 
-                log_msg = f'Progress: {distance_traveled:.3f}m / {distance:.3f}m ({progress_percent:.0f}%)'
+                direction = "backward" if is_backward_movement else "forward"
+                log_msg = f'{direction.capitalize()} Progress: {distance_traveled:.3f}m / {abs(distance):.3f}m ({progress_percent:.0f}%)'
                 log_msg += f' | Heading: {math.degrees(current_heading):.2f}° (error: {math.degrees(heading_error):.2f}°)'
                 
-                # Add obstacle status to regular logs
-                if hasattr(self, 'obstacle_ahead'):
+                # Add obstacle status to regular logs (only for forward movement)
+                if not is_backward_movement and hasattr(self, 'obstacle_ahead'):
                     obstacle_status = "OBSTACLE" if self.obstacle_ahead else "CLEAR"
                     if hasattr(self, 'obstacle_distance') and self.obstacle_distance != float('inf'):
                         log_msg += f' | {obstacle_status} ({self.obstacle_distance:.3f}m)'
@@ -753,7 +455,7 @@ class PIDStraightLineController(Node):
 
             # Reduced sleep for more responsive obstacle detection
             time.sleep(0.02)  # 50Hz instead of 20Hz for better responsiveness
-
+    
     def check_path_obstacles(self):
         """Optimized obstacle checking with faster processing"""
         if self.latest_scan is None:
@@ -896,278 +598,6 @@ class PIDStraightLineController(Node):
         
         self.get_logger().info('=== OBSTACLE AVOIDANCE COMPLETED ===')
    
-    # def move_distance(self, distance, description=""):
-    #     """Move forward for a specific distance using IMU for heading correction"""
-        
-    #     # NEW: Pre-movement obstacle check with detailed logging
-    #     self.get_logger().info(f'=== PRE-MOVEMENT OBSTACLE CHECK ===')
-    #     self.check_path_obstacles()
-        
-    #     if hasattr(self, 'obstacle_ahead') and self.obstacle_ahead:
-    #         self.get_logger().info(f'OBSTACLE STATUS: obstacle_ahead={self.obstacle_ahead}')
-    #         self.get_logger().info(f'OBSTACLE DISTANCE: {self.obstacle_distance:.3f}m')
-    #         self.get_logger().info(f'PLANNED MOVEMENT: {distance:.3f}m')
-    #         self.get_logger().info(f'SAFETY THRESHOLD: 0.08m (current), DETECTION THRESHOLD: 0.15m')
-            
-    #         # Check if we should avoid immediately
-    #         if distance > 0.1:  # For movements > 10cm
-    #             self.get_logger().info(f'DECISION: Starting obstacle avoidance immediately (planned distance > 0.1m)')
-    #             self.navigate_around_obstacle(distance)
-    #             return
-    #         else:
-    #             self.get_logger().info(f'DECISION: Planned distance small ({distance:.3f}m), proceeding with caution')
-
-    #     # Safety check: Don't move forward if we're too close to an obstacle
-    #     if hasattr(self, 'obstacle_ahead') and self.obstacle_ahead and distance > 0:
-    #         if hasattr(self, 'obstacle_distance') and self.obstacle_distance < 0.20:  # Less than 8cm clearance
-    #             self.get_logger().warn(f'SAFETY: Refusing to move forward - too close to obstacle ({self.obstacle_distance:.3f}m clearance)')
-    #             return
-    #         else:
-    #             self.get_logger().warn(f'WARNING: Moving despite obstacle detection (clearance: {self.obstacle_distance:.3f}m > safety threshold: 0.08m)')
-
-    #     if description:
-    #         self.get_logger().info(f'Starting {description}: {distance:.2f}m')
-    #     else:
-    #         self.get_logger().info(f'Moving forward: {distance:.2f}m')
-        
-    #     # Log initial state before movement
-    #     self.log_heading_state("MOVE_START")
-        
-    #     # Record starting position and heading (use IMU if available)
-    #     start_x = self.current_x
-    #     start_y = self.current_y
-    #     target_heading = self.get_current_heading()  # Maintain current heading using IMU
-
-    #     self.get_logger().info(f'TARGET HEADING SET TO: {math.degrees(target_heading):.2f}° (from current heading)')
-    #     self.get_logger().info(f'This heading was captured at position: ({self.current_x:.3f}, {self.current_y:.3f})')
-
-    #     heading_source = "IMU" if self.imu_received else "odometry"
-    #     self.get_logger().info(f'Using {heading_source} for heading correction during movement')
-    #     self.get_logger().info(f'Target heading for straight line: {math.degrees(target_heading):.2f}°')
-        
-    #     twist = Twist()
-    #     max_heading_error = 0.0  # Track maximum heading deviation
-    #     loop_count = 0  # NEW: Track loop iterations
-        
-    #     while rclpy.ok():
-    #         loop_count += 1
-    #         # Process callbacks for fresh odometry and IMU
-    #         rclpy.spin_once(self, timeout_sec=0.01)
-            
-    #         # Calculate distance traveled
-    #         distance_traveled = math.sqrt(
-    #             (self.current_x - start_x)**2 + 
-    #             (self.current_y - start_y)**2
-    #         )
-            
-    #         # CHECK FOR OBSTACLES DURING MOVEMENT (ENHANCED LOGGING)
-    #         self.check_path_obstacles()
-    #         if self.obstacle_ahead:
-    #             self.get_logger().info(f'=== OBSTACLE DETECTED DURING MOVEMENT ===')
-    #             self.get_logger().info(f'Loop iteration: {loop_count}')
-    #             self.get_logger().info(f'Distance traveled: {distance_traveled:.3f}m / {distance:.3f}m')
-    #             self.get_logger().info(f'Obstacle clearance: {self.obstacle_distance:.3f}m')
-    #             self.get_logger().info(f'Current position: ({self.current_x:.3f}, {self.current_y:.3f})')
-                
-    #             # Stop the robot immediately
-    #             twist.linear.x = 0.0
-    #             twist.angular.z = 0.0
-    #             self.cmd_vel_pub.publish(twist)
-                
-    #             # Calculate remaining distance
-    #             remaining_distance = distance - distance_traveled
-    #             self.get_logger().info(f'Remaining distance: {remaining_distance:.3f}m')
-                
-    #             # Start obstacle avoidance with remaining distance
-    #             if remaining_distance > 0.05:
-    #                 self.navigate_around_obstacle(remaining_distance)
-    #             else:
-    #                 self.get_logger().info('Remaining distance too small, stopping here')
-    #             return
-            
-    #         # Check if target distance reached
-    #         if distance_traveled >= distance:
-    #             twist.linear.x = 0.0
-    #             twist.angular.z = 0.0
-    #             self.cmd_vel_pub.publish(twist)
-    #             self.get_logger().info(f'Distance completed: {distance_traveled:.3f}m in {loop_count} loops')
-    #             self.get_logger().info(f'Maximum heading error during movement: {math.degrees(max_heading_error):.2f}°')
-                
-    #             # Log final state after movement
-    #             self.log_heading_state("MOVE_COMPLETE")
-    #             break
-            
-    #         # Set forward velocity
-    #         twist.linear.x = self.forward_speed
-            
-    #         # Heading correction to maintain straight line using IMU if available
-    #         current_heading = self.get_current_heading()
-    #         heading_error = target_heading - current_heading
-    #         heading_error = self.normalize_angle(heading_error)
-            
-    #         # Track maximum heading error
-    #         max_heading_error = max(max_heading_error, abs(heading_error))
-            
-    #         # Calculate angular correction
-    #         angular_correction = -self.kp_heading * heading_error
-    #         twist.angular.z = angular_correction
-            
-    #         # Publish command
-    #         self.cmd_vel_pub.publish(twist)
-            
-    #         # Enhanced logging with heading information
-    #         current_time = time.time()
-    #         if current_time - self.last_log_time > 1.0:
-    #             progress_percent = min(100, (distance_traveled / distance) * 100)
-                
-    #             # Log progress with detailed heading info
-    #             log_msg = f'Distance: {distance_traveled:.3f}m / {distance:.3f}m ({progress_percent:.0f}%)'
-    #             log_msg += f' | Heading: Current={math.degrees(current_heading):.2f}°'
-    #             log_msg += f', Target={math.degrees(target_heading):.2f}°'
-    #             log_msg += f', Error={math.degrees(heading_error):.2f}°'
-    #             log_msg += f', Angular_Cmd={angular_correction:.3f}rad/s'
-    #             log_msg += f' | Max_Error={math.degrees(max_heading_error):.2f}°'
-    #             log_msg += f' | Loops: {loop_count}'  # NEW
-                
-    #             self.get_logger().info(log_msg)
-    #             self.last_log_time = current_time
-
-    #         # NEW: Log obstacle status every few loops
-    #         if loop_count % 10 == 0:  # Every 10th loop
-    #             obstacle_status = f'Loop {loop_count}: obstacle_ahead={getattr(self, "obstacle_ahead", "Unknown")}'
-    #             if hasattr(self, 'obstacle_distance'):
-    #                 obstacle_status += f', clearance={self.obstacle_distance:.3f}m'
-    #             self.get_logger().info(obstacle_status)
-
-    #         time.sleep(0.05)
-
-    # def move_distance(self, distance, description=""):
-    #     """Move forward for a specific distance using IMU for heading correction"""
-
-    #     # Safety check: Don't move forward if we're too close to an obstacle
-    #     if hasattr(self, 'obstacle_ahead') and self.obstacle_ahead and distance > 0:
-    #         if hasattr(self, 'obstacle_distance') and self.obstacle_distance < 0.08:  # Less than 8cm clearance
-    #             self.get_logger().warn(f'SAFETY: Refusing to move forward - too close to obstacle ({self.obstacle_distance:.3f}m clearance)')
-    #             return
-
-    #     # # NEW: Check for obstacles first
-    #     # if hasattr(self, 'obstacle_ahead') and self.obstacle_ahead and distance > 0.5:
-    #     #     self.get_logger().info('=== OBSTACLE AVOIDANCE DEBUG ===')
-    #     #     self.log_lidar_debug()  # NEW: Log LIDAR sectors
-    #     #     self.navigate_around_obstacle(distance)
-    #     #     return
-    
-    #     if description:
-    #         self.get_logger().info(f'Starting {description}: {distance:.2f}m')
-    #     else:
-    #         self.get_logger().info(f'Moving forward: {distance:.2f}m')
-        
-    #     # Log initial state before movement
-    #     self.log_heading_state("MOVE_START")
-        
-    #     # Record starting position and heading (use IMU if available)
-    #     start_x = self.current_x
-    #     start_y = self.current_y
-    #     target_heading = self.get_current_heading()  # Maintain current heading using IMU
-
-    #     self.get_logger().info(f'TARGET HEADING SET TO: {math.degrees(target_heading):.2f}° (from current heading)')
-    #     self.get_logger().info(f'This heading was captured at position: ({self.current_x:.3f}, {self.current_y:.3f})')
-
-        
-    #     heading_source = "IMU" if self.imu_received else "odometry"
-    #     self.get_logger().info(f'Using {heading_source} for heading correction during movement')
-    #     self.get_logger().info(f'Target heading for straight line: {math.degrees(target_heading):.2f}°')
-        
-    #     twist = Twist()
-    #     max_heading_error = 0.0  # Track maximum heading deviation
-        
-    #     while rclpy.ok():
-    #         # Process callbacks for fresh odometry and IMU
-    #         rclpy.spin_once(self, timeout_sec=0.01)
-            
-    #         # Calculate distance traveled
-    #         distance_traveled = math.sqrt(
-    #             (self.current_x - start_x)**2 + 
-    #             (self.current_y - start_y)**2
-    #         )
-            
-    #         # CHECK FOR OBSTACLES DURING MOVEMENT (ADD THIS BLOCK)
-    #         self.check_path_obstacles()
-    #         if self.obstacle_ahead:
-    #             self.get_logger().info(f'OBSTACLE DETECTED during movement at {distance_traveled:.3f}m!')
-    #             self.get_logger().info(f'Obstacle clearance: {self.obstacle_distance:.3f}m')
-                
-    #             # Stop the robot immediately
-    #             twist.linear.x = 0.0
-    #             twist.angular.z = 0.0
-    #             self.cmd_vel_pub.publish(twist)
-                
-    #             # Calculate remaining distance
-    #             remaining_distance = distance - distance_traveled
-    #             self.get_logger().info(f'Remaining distance: {remaining_distance:.3f}m')
-                
-    #             # Start obstacle avoidance with remaining distance
-    #             if remaining_distance > 0.05:
-    #                 self.navigate_around_obstacle(remaining_distance)
-    #             else:
-    #                 self.get_logger().info('Remaining distance too small, stopping here')
-    #             return
-            
-    #         # Check if target distance reached
-    #         if distance_traveled >= distance:
-    #             twist.linear.x = 0.0
-    #             twist.angular.z = 0.0
-    #             self.cmd_vel_pub.publish(twist)
-    #             self.get_logger().info(f'Distance completed: {distance_traveled:.3f}m')
-    #             self.get_logger().info(f'Maximum heading error during movement: {math.degrees(max_heading_error):.2f}°')
-                
-    #             # Log final state after movement
-    #             self.log_heading_state("MOVE_COMPLETE")
-    #             break
-            
-    #         # Set forward velocity
-    #         twist.linear.x = self.forward_speed
-            
-    #         # Heading correction to maintain straight line using IMU if available
-    #         current_heading = self.get_current_heading()
-    #         heading_error = target_heading - current_heading
-    #         heading_error = self.normalize_angle(heading_error)
-            
-    #         # Track maximum heading error
-    #         max_heading_error = max(max_heading_error, abs(heading_error))
-            
-    #         # Calculate angular correction
-    #         # IMU is mounted upside down - flip sign to correct for inverted yaw axis
-
-    #         angular_correction = -self.kp_heading * heading_error
-    #         twist.angular.z = angular_correction
-            
-    #         # Publish command
-    #         self.cmd_vel_pub.publish(twist)
-            
-    #         # Enhanced logging with heading information
-    #         current_time = time.time()
-    #         if current_time - self.last_log_time > 1.0:
-    #             progress_percent = min(100, (distance_traveled / distance) * 100)
-                
-    #             # Log progress with detailed heading info
-    #             log_msg = f'Distance: {distance_traveled:.3f}m / {distance:.3f}m ({progress_percent:.0f}%)'
-    #             log_msg += f' | Heading: Current={math.degrees(current_heading):.2f}°'
-    #             log_msg += f', Target={math.degrees(target_heading):.2f}°'
-    #             log_msg += f', Error={math.degrees(heading_error):.2f}°'
-    #             log_msg += f', Angular_Cmd={angular_correction:.3f}rad/s'
-    #             log_msg += f' | Max_Error={math.degrees(max_heading_error):.2f}°'
-                
-    #             self.get_logger().info(log_msg)
-    #             self.last_log_time = current_time
-
-    #         self.get_logger().info(f'PID Debug: Error={math.degrees(heading_error):.2f}°, '
-    #                 f'Correction={angular_correction:.3f}rad/s, '
-    #                 f'Expected_turn_direction={"LEFT" if angular_correction > 0 else "RIGHT"}')
-
-            
-    #         time.sleep(0.05)
-    
     def calculate_room_width(self):
         """Calculate room width using LIDAR data"""
         if self.latest_scan is None:
