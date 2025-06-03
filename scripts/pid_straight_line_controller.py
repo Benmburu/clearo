@@ -35,6 +35,9 @@ class PIDStraightLineController(Node):
         # NEW: Simple obstacle detection variables
         self.obstacle_ahead = False
         self.obstacle_distance = float('inf')
+
+        self.in_avoidance_maneuver = False
+        self.avoidance_original_heading = None
         
         self.target_distance = self.get_parameter('target_distance').value
         self.forward_speed = self.get_parameter('forward_speed').value
@@ -228,6 +231,236 @@ class PIDStraightLineController(Node):
         
         self.get_logger().info('=' * 50)
     
+    # def move_distance(self, distance, description="", skip_obstacle_avoidance=False):
+    #     """Move forward for a specific distance with continuous obstacle monitoring"""
+        
+    #     # Determine if this is a backward movement
+    #     is_backward_movement = distance < 0
+        
+    #     # Pre-movement obstacle check (only for forward movements, not during obstacle avoidance)
+    #     if not skip_obstacle_avoidance and not is_backward_movement:
+    #         self.get_logger().info(f'=== PRE-MOVEMENT OBSTACLE CHECK ===')
+    #         self.check_path_obstacles()
+            
+    #         if hasattr(self, 'obstacle_ahead') and self.obstacle_ahead:
+    #             current_clearance = getattr(self, 'obstacle_distance', float('inf'))
+    #             self.get_logger().info(f'OBSTACLE STATUS: obstacle_ahead={self.obstacle_ahead}')
+    #             self.get_logger().info(f'OBSTACLE DISTANCE: {current_clearance:.3f}m')
+    #             self.get_logger().info(f'PLANNED MOVEMENT: {distance:.3f}m')
+    #             self.get_logger().info(f'MINIMUM_SAFE_CLEARANCE: {self.MINIMUM_SAFE_CLEARANCE:.3f}m (±{self.CLEARANCE_TOLERANCE:.3f}m)')
+                
+    #             # NEW: Check if we need to backup first
+    #             if current_clearance < (self.MINIMUM_SAFE_CLEARANCE - self.CLEARANCE_TOLERANCE):
+    #                 backup_distance = (self.TARGET_APPROACH_CLEARANCE - current_clearance) + 0.05
+    #                 self.get_logger().warn(f'TOO CLOSE: {current_clearance:.3f}m < {self.MINIMUM_SAFE_CLEARANCE:.3f}m')
+    #                 self.get_logger().warn(f'BACKING UP: {backup_distance:.3f}m to create safe clearance')
+                    
+    #                 # Execute backup
+    #                 twist = Twist()
+    #                 twist.linear.x = 0.0
+    #                 twist.angular.z = 0.0
+    #                 self.cmd_vel_pub.publish(twist)
+    #                 time.sleep(0.1)
+                    
+    #                 self.move_distance(-backup_distance, "emergency clearance backup", skip_obstacle_avoidance=True)
+    #                 time.sleep(0.2)  # Brief pause for sensor update
+                
+    #             if distance > 0.1:  # For movements > 10cm
+    #                 self.get_logger().info(f'DECISION: Starting obstacle avoidance')
+    #                 self.navigate_around_obstacle(distance)
+    #                 return
+    #             else:
+    #                 self.get_logger().info(f'DECISION: Small distance ({distance:.3f}m), proceeding with caution')
+
+    #     else:
+    #         if is_backward_movement:
+    #             self.get_logger().info(f'=== BACKWARD MOVEMENT (skipping obstacle checks) ===')
+    #         else:
+    #             self.get_logger().info(f'=== OBSTACLE AVOIDANCE MOVEMENT (skipping pre-check) ===')
+
+    #     if description:
+    #         direction = "backward" if is_backward_movement else "forward"
+    #         self.get_logger().info(f'Starting {description} ({direction}): {abs(distance):.2f}m')
+    #     else:
+    #         direction = "backward" if is_backward_movement else "forward"
+    #         self.get_logger().info(f'Moving {direction}: {abs(distance):.2f}m')
+        
+    #     # Log initial state
+    #     self.log_heading_state("MOVE_START")
+        
+    #     # Record starting position and heading
+    #     start_x = self.current_x
+    #     start_y = self.current_y
+    #     target_heading = self.get_current_heading()
+
+    #     self.get_logger().info(f'TARGET HEADING SET TO: {math.degrees(target_heading):.2f}°')
+        
+    #     twist = Twist()
+    #     max_heading_error = 0.0
+    #     loop_count = 0
+    #     last_obstacle_check = 0
+        
+    #     # NEW: Variables for continuous monitoring (only for forward movement)
+    #     previous_distances = []  # Track last few distance readings
+    #     distance_trend_threshold = 5  # Number of readings to analyze
+    #     early_warning_distance = 0.35  # Start slowing down at 35cm
+    #     emergency_stop_distance = 0.15  # Emergency stop at 15cm
+        
+    #     while rclpy.ok():
+    #         loop_count += 1
+
+    #         # Simple stuck detection (only for forward movement)
+    #         if not is_backward_movement and loop_count > 50:
+    #             distance_traveled = math.sqrt((self.current_x - start_x)**2 + (self.current_y - start_y)**2)
+    #             if distance_traveled < 0.05:  # 50 loops with less than 5cm progress
+    #                 if self.obstacle_ahead:
+    #                     current_clearance = getattr(self, 'obstacle_distance', float('inf'))
+    #                     if current_clearance < self.TARGET_APPROACH_CLEARANCE:
+    #                         self.get_logger().warn(f'ROBOT APPEARS STUCK: Backing up to create space')
+    #                         twist.linear.x = 0.0
+    #                         twist.angular.z = 0.0
+    #                         self.cmd_vel_pub.publish(twist)
+                            
+    #                         backup_distance = max(0.10, (self.TARGET_APPROACH_CLEARANCE - current_clearance) + 0.05)
+    #                         self.move_distance(-backup_distance, "stuck recovery backup", skip_obstacle_avoidance=True)
+                            
+    #                         remaining_distance = distance - distance_traveled
+    #                         if remaining_distance > 0.05:
+    #                             self.navigate_around_obstacle(remaining_distance)
+    #                         return
+        
+    #         current_time = time.time()
+            
+    #         # Process callbacks for fresh sensor data
+    #         rclpy.spin_once(self, timeout_sec=0.01)
+            
+    #         # Calculate distance traveled
+    #         distance_traveled = math.sqrt(
+    #             (self.current_x - start_x)**2 + 
+    #             (self.current_y - start_y)**2
+    #         )
+            
+    #         # ENHANCED OBSTACLE MONITORING - Only for forward movements
+    #         if not skip_obstacle_avoidance and not is_backward_movement:
+    #             self.check_path_obstacles()
+            
+    #             # NEW: Track obstacle distance trend for predictive stopping
+    #             if hasattr(self, 'obstacle_distance') and self.obstacle_distance != float('inf'):
+    #                 previous_distances.append(self.obstacle_distance)
+    #                 if len(previous_distances) > distance_trend_threshold:
+    #                     previous_distances.pop(0)  # Keep only recent readings
+                    
+    #                 # Calculate trend (if distance is decreasing rapidly)
+    #                 if len(previous_distances) >= 3:
+    #                     recent_change = previous_distances[-1] - previous_distances[-3]
+    #                     if recent_change < -0.05:  # Distance decreasing by 5cm over 3 readings
+    #                         self.get_logger().warn(f'RAPID APPROACH DETECTED: Distance decreased by {-recent_change*100:.1f}cm in 3 readings')
+            
+    #         # NEW: Multi-level obstacle response (only for forward movement)
+    #         if not is_backward_movement and not skip_obstacle_avoidance and self.obstacle_ahead:
+    #             current_clearance = getattr(self, 'obstacle_distance', float('inf'))
+                
+    #             self.get_logger().info(f'=== OBSTACLE DETECTED DURING MOVEMENT ===')
+    #             self.get_logger().info(f'Loop: {loop_count}, Distance traveled: {distance_traveled:.3f}m / {distance:.3f}m')
+    #             self.get_logger().info(f'Obstacle clearance: {current_clearance:.3f}m')
+                
+    #             # EMERGENCY STOP - Immediate halt with backward movement if too close
+    #             if current_clearance < (self.MINIMUM_SAFE_CLEARANCE - self.CLEARANCE_TOLERANCE):
+    #                 self.get_logger().error(f'EMERGENCY STOP! Clearance {current_clearance:.3f}m < {self.MINIMUM_SAFE_CLEARANCE:.3f}m')
+    #                 twist.linear.x = 0.0
+    #                 twist.angular.z = 0.0
+    #                 self.cmd_vel_pub.publish(twist)
+    #                 time.sleep(0.1)  # Brief pause to ensure stop
+                    
+    #                 # Calculate backup distance to achieve target clearance
+    #                 backup_distance = (self.TARGET_APPROACH_CLEARANCE - current_clearance) + 0.05
+    #                 self.get_logger().warn(f'EMERGENCY BACKUP: {backup_distance:.3f}m to achieve {self.TARGET_APPROACH_CLEARANCE:.3f}m clearance')
+                    
+    #                 # Move backwards (skip_obstacle_avoidance=True to prevent recursion)
+    #                 self.move_distance(-backup_distance, "emergency backup from obstacle", skip_obstacle_avoidance=True)
+
+    #                 # Start obstacle avoidance with remaining distance
+    #                 remaining_distance = distance - distance_traveled
+    #                 if remaining_distance > 0.05:
+    #                     self.navigate_around_obstacle(remaining_distance)
+    #                 return
+                
+    #             # EARLY WARNING - Slow down but continue
+    #             elif current_clearance < early_warning_distance:
+    #                 speed_factor = (current_clearance - emergency_stop_distance) / (early_warning_distance - emergency_stop_distance)
+    #                 speed_factor = max(0.2, min(1.0, speed_factor))  # Between 20% and 100% speed
+                    
+    #                 self.get_logger().warn(f'EARLY WARNING: Slowing to {speed_factor*100:.0f}% speed (clearance: {current_clearance:.3f}m)')
+    #                 twist.linear.x = self.forward_speed * speed_factor
+                    
+    #                 # If we're moving very slowly and still detecting obstacles, start avoidance
+    #                 if speed_factor < 0.4 and loop_count > 20:  # Give it some time
+    #                     self.get_logger().info(f'SLOW SPEED AVOIDANCE: Starting avoidance due to slow progress')
+    #                     twist.linear.x = 0.0
+    #                     twist.angular.z = 0.0
+    #                     self.cmd_vel_pub.publish(twist)
+                        
+    #                     remaining_distance = distance - distance_traveled
+    #                     if remaining_distance > 0.05:
+    #                         self.navigate_around_obstacle(remaining_distance)
+    #                     return
+                
+    #             # NORMAL OBSTACLE - Continue but monitor closely
+    #             else:
+    #                 self.get_logger().info(f'OBSTACLE MONITORING: Clearance {current_clearance:.3f}m - continuing')
+    #                 twist.linear.x = self.forward_speed
+    #         else:
+    #             # No obstacle or backward movement - set appropriate speed
+    #             if is_backward_movement:
+    #                 twist.linear.x = -self.forward_speed  # Negative speed for backward
+    #             else:
+    #                 twist.linear.x = self.forward_speed   # Positive speed for forward
+            
+    #         # Check if target distance reached
+    #         if abs(distance_traveled) >= abs(distance):
+    #             twist.linear.x = 0.0
+    #             twist.angular.z = 0.0
+    #             self.cmd_vel_pub.publish(twist)
+    #             self.get_logger().info(f'Distance completed: {distance_traveled:.3f}m in {loop_count} loops')
+    #             self.get_logger().info(f'Maximum heading error: {math.degrees(max_heading_error):.2f}°')
+    #             self.log_heading_state("MOVE_COMPLETE")
+    #             break
+            
+    #         # Heading correction
+    #         current_heading = self.get_current_heading()
+    #         heading_error = target_heading - current_heading
+    #         heading_error = self.normalize_angle(heading_error)
+    #         max_heading_error = max(max_heading_error, abs(heading_error))
+            
+    #         angular_correction = -self.kp_heading * heading_error
+    #         twist.angular.z = angular_correction
+            
+    #         # Publish movement command
+    #         self.cmd_vel_pub.publish(twist)
+            
+    #         # Enhanced logging
+    #         if current_time - self.last_log_time > 1.0:
+    #             progress_percent = min(100, (distance_traveled / abs(distance)) * 100)
+                
+    #             direction = "backward" if is_backward_movement else "forward"
+    #             log_msg = f'{direction.capitalize()} Progress: {distance_traveled:.3f}m / {abs(distance):.3f}m ({progress_percent:.0f}%)'
+    #             log_msg += f' | Heading: {math.degrees(current_heading):.2f}° (error: {math.degrees(heading_error):.2f}°)'
+                
+    #             # Add obstacle status to regular logs (only for forward movement)
+    #             if not is_backward_movement and hasattr(self, 'obstacle_ahead'):
+    #                 obstacle_status = "OBSTACLE" if self.obstacle_ahead else "CLEAR"
+    #                 if hasattr(self, 'obstacle_distance') and self.obstacle_distance != float('inf'):
+    #                     log_msg += f' | {obstacle_status} ({self.obstacle_distance:.3f}m)'
+    #                 else:
+    #                     log_msg += f' | {obstacle_status}'
+                
+    #             log_msg += f' | Loops: {loop_count}'
+    #             self.get_logger().info(log_msg)
+    #             self.last_log_time = current_time
+
+    #         # Reduced sleep for more responsive obstacle detection
+    #         time.sleep(0.02)  # 50Hz instead of 20Hz for better responsiveness
+    
     def move_distance(self, distance, description="", skip_obstacle_avoidance=False):
         """Move forward for a specific distance with continuous obstacle monitoring"""
         
@@ -361,6 +594,29 @@ class PIDStraightLineController(Node):
                 self.get_logger().info(f'Loop: {loop_count}, Distance traveled: {distance_traveled:.3f}m / {distance:.3f}m')
                 self.get_logger().info(f'Obstacle clearance: {current_clearance:.3f}m')
                 
+                # CHECK: Are we in an avoidance maneuver and possibly detecting a wall?
+                if hasattr(self, 'in_avoidance_maneuver') and self.in_avoidance_maneuver:
+                    self.get_logger().info('AVOIDANCE MODE: Checking if this is wall detection during return path')
+                    
+                    # If we're close to completing the movement and clearance isn't critically dangerous
+                    progress_ratio = distance_traveled / abs(distance) if distance != 0 else 1.0
+                    if (progress_ratio > 0.7 and current_clearance > 0.08):  # 70% progress and not critically close
+                        self.get_logger().info(f'WALL DETECTION: {progress_ratio*100:.0f}% progress, {current_clearance:.2f}m clearance - STOPPING avoidance here')
+                        
+                        # Stop movement
+                        twist.linear.x = 0.0
+                        twist.angular.z = 0.0
+                        self.cmd_vel_pub.publish(twist)
+                        
+                        # Clear avoidance state - robot is now at a safe position to continue normally
+                        self.in_avoidance_maneuver = False
+                        if hasattr(self, 'avoidance_original_heading'):
+                            self.avoidance_original_heading = None
+                        
+                        self.get_logger().info('AVOIDANCE COMPLETE - robot at safe distance from original obstacle')
+                        self.get_logger().info('Exiting movement - robot can continue normally from this position')
+                        return  # Exit the movement, robot is at a safe position
+                
                 # EMERGENCY STOP - Immediate halt with backward movement if too close
                 if current_clearance < (self.MINIMUM_SAFE_CLEARANCE - self.CLEARANCE_TOLERANCE):
                     self.get_logger().error(f'EMERGENCY STOP! Clearance {current_clearance:.3f}m < {self.MINIMUM_SAFE_CLEARANCE:.3f}m')
@@ -376,9 +632,9 @@ class PIDStraightLineController(Node):
                     # Move backwards (skip_obstacle_avoidance=True to prevent recursion)
                     self.move_distance(-backup_distance, "emergency backup from obstacle", skip_obstacle_avoidance=True)
 
-                    # Start obstacle avoidance with remaining distance
+                    # Start obstacle avoidance with remaining distance (only if not already in avoidance)
                     remaining_distance = distance - distance_traveled
-                    if remaining_distance > 0.05:
+                    if remaining_distance > 0.05 and not (hasattr(self, 'in_avoidance_maneuver') and self.in_avoidance_maneuver):
                         self.navigate_around_obstacle(remaining_distance)
                     return
                 
@@ -727,7 +983,7 @@ class PIDStraightLineController(Node):
         # Find the span of obstacle detection from the side
         min_distance = min(obstacle_distances)
         # filtered_distances = [d for d in obstacle_distances if d <= min_distance + 0.3]
-        filtered_distances = [d for d in obstacle_distances if d <= min_distance + 0.20]
+        filtered_distances = [d for d in obstacle_distances if d <= min_distance + 0.15]
         filtered_angles = [obstacle_angles[i] for i, d in enumerate(obstacle_distances) if d <= min_distance + 0.3]
 
         # Use only the angular span of the filtered (close) points
@@ -833,6 +1089,10 @@ class PIDStraightLineController(Node):
     
     def navigate_around_obstacle(self, original_distance):
         """Navigate around obstacle using intelligent side selection"""
+        # Mark that we're starting an avoidance maneuver
+        self.in_avoidance_maneuver = True
+        self.avoidance_original_heading = self.get_current_heading()
+        
         self.get_logger().info(f'Obstacle detected - Robot front clearance: {self.obstacle_distance:.2f}m')
         self.get_logger().info('=== OBSTACLE AVOIDANCE TRIGGERED ===')
         self.get_logger().info(f'Actual robot front clearance: {self.obstacle_distance:.2f}m')
@@ -878,6 +1138,10 @@ class PIDStraightLineController(Node):
             self.get_logger().info('Step 9: No remaining distance to cover')
         
         self.get_logger().info('=== OBSTACLE AVOIDANCE COMPLETED ===')
+
+        # Clear avoidance state
+        self.in_avoidance_maneuver = False
+        self.avoidance_original_heading = None
 
     def calculate_room_width(self):
         """Calculate room width using LIDAR data"""
