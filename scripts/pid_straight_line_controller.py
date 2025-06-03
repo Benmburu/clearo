@@ -27,7 +27,7 @@ class PIDStraightLineController(Node):
         self.declare_parameter('kp_heading', 12.0)
         self.declare_parameter('target_heading_deg', -999.0)
         self.declare_parameter('turn_speed', 0.1)  # Angular velocity for turns
-        self.declare_parameter('offset_distance', 0.2)  # 20cm offset
+        self.declare_parameter('offset_distance', 0.05)  # 20cm offset
         self.declare_parameter('safety_margin', 0.15)  # 15cm safety margin from walls
 
         # NEW: Simple obstacle detection variables
@@ -500,6 +500,103 @@ class PIDStraightLineController(Node):
             self.obstacle_ahead = False
             self.obstacle_distance = float('inf')
 
+    def check_side_clearances(self):
+        """Check clearance on both left and right sides for optimal avoidance direction"""
+        if self.latest_scan is None:
+            return float('inf'), float('inf')
+        
+        ranges = np.array(self.latest_scan.ranges)
+        angle_min = self.latest_scan.angle_min
+        angle_increment = self.latest_scan.angle_increment
+        
+        # Define side sectors (90° left and right from robot front)
+        # Adjusted for the coordinate transformation (+π)
+        left_sector = (math.pi/4, math.pi/2 + math.pi/4)    # 45° to 135° (left side)
+        right_sector = (-math.pi/2 - math.pi/4, -math.pi/4)  # -135° to -45° (right side)
+        
+        left_distances = []
+        right_distances = []
+        
+        # Check scan range for debugging
+        total_angle_range = len(ranges) * angle_increment
+        self.get_logger().info(f'Scan info: {len(ranges)} points, angle_min={angle_min:.2f}, increment={angle_increment:.4f}, total_range={total_angle_range:.2f}')
+        
+        for i, range_val in enumerate(ranges):
+            angle = angle_min + i * angle_increment + math.pi
+            angle = self.normalize_angle(angle)
+            
+            # Only consider valid ranges
+            if self.latest_scan.range_min <= range_val <= 3.0:
+                # Check left side
+                if left_sector[0] <= angle <= left_sector[1]:
+                    left_distances.append(range_val)
+                
+                # Check right side  
+                elif right_sector[0] <= angle <= right_sector[1]:
+                    right_distances.append(range_val)
+        
+        # Calculate minimum distances (closest obstacles on each side)
+        left_clearance = min(left_distances) if left_distances else float('inf')
+        right_clearance = min(right_distances) if right_distances else float('inf')
+        
+        # Apply LIDAR offset correction for more accurate distance
+        ROBOT_WIDTH = 0.178  # Typical robot width
+        LIDAR_OFFSET_FROM_SIDE = ROBOT_WIDTH / 2
+        
+        if left_clearance != float('inf'):
+            left_clearance = left_clearance - LIDAR_OFFSET_FROM_SIDE
+        if right_clearance != float('inf'):
+            right_clearance = right_clearance - LIDAR_OFFSET_FROM_SIDE
+        
+        self.get_logger().info(f'Side clearances - Left: {left_clearance:.2f}m, Right: {right_clearance:.2f}m')
+        self.get_logger().info(f'Left samples: {len(left_distances)}, Right samples: {len(right_distances)}')
+        
+        return left_clearance, right_clearance
+
+    def choose_avoidance_direction(self):
+        """Determine optimal direction for obstacle avoidance"""
+        left_clearance, right_clearance = self.check_side_clearances()
+        
+        # Minimum required clearance for safe navigation
+        MINIMUM_SIDE_CLEARANCE = 0.4  # 40cm minimum clearance needed
+        
+        # Decision logic
+        if left_clearance >= MINIMUM_SIDE_CLEARANCE and right_clearance >= MINIMUM_SIDE_CLEARANCE:
+            # Both sides clear - choose the side with more clearance
+            if left_clearance > right_clearance:
+                direction = "left"
+                clearance = left_clearance
+                self.get_logger().info(f'Both sides clear - choosing LEFT (better clearance: {left_clearance:.2f}m vs {right_clearance:.2f}m)')
+            else:
+                direction = "right" 
+                clearance = right_clearance
+                self.get_logger().info(f'Both sides clear - choosing RIGHT (better clearance: {right_clearance:.2f}m vs {left_clearance:.2f}m)')
+        
+        elif left_clearance >= MINIMUM_SIDE_CLEARANCE:
+            # Only left side clear
+            direction = "left"
+            clearance = left_clearance
+            self.get_logger().info(f'Only LEFT side clear (clearance: {left_clearance:.2f}m, right blocked: {right_clearance:.2f}m)')
+        
+        elif right_clearance >= MINIMUM_SIDE_CLEARANCE:
+            # Only right side clear
+            direction = "right"
+            clearance = right_clearance
+            self.get_logger().info(f'Only RIGHT side clear (clearance: {right_clearance:.2f}m, left blocked: {left_clearance:.2f}m)')
+        
+        else:
+            # Both sides blocked - choose the less blocked side or default to left
+            if left_clearance > right_clearance:
+                direction = "left"
+                clearance = left_clearance
+                self.get_logger().warn(f'BOTH SIDES BLOCKED - choosing LEFT as less blocked (L:{left_clearance:.2f}m vs R:{right_clearance:.2f}m)')
+            else:
+                direction = "right"
+                clearance = right_clearance  
+                self.get_logger().warn(f'BOTH SIDES BLOCKED - choosing RIGHT as less blocked (R:{right_clearance:.2f}m vs L:{left_clearance:.2f}m)')
+        
+        return direction, clearance
+
     # ADDITIONAL HELPER METHOD for even more responsive detection
     def emergency_obstacle_check(self):
         """Ultra-fast obstacle check for emergency situations"""
@@ -527,41 +624,16 @@ class PIDStraightLineController(Node):
         
         return False, float('inf')
 
-    def navigate_around_obstacle(self, original_distance):
-        """Navigate around obstacle using corrected distances"""
-        self.get_logger().info(f'Obstacle detected - Robot front clearance: {self.obstacle_distance:.2f}m')
-        self.get_logger().info('=== OBSTACLE AVOIDANCE TRIGGERED ===')
-        self.get_logger().info(f'Actual robot front clearance: {self.obstacle_distance:.2f}m')
-        self.get_logger().info(f'Original planned distance: {original_distance:.2f}m')
-        self.get_logger().info(f'Current position: ({self.current_x:.2f}, {self.current_y:.2f})')
-
-        # Step 1: Approach obstacle closer (stop 10cm before robot front hits obstacle)
-        # Since self.obstacle_distance is already corrected to robot edge, we can use it directly
-        target_clearance = 0.10  # Want 10cm clearance from robot front to obstacle
-        current_clearance = self.obstacle_distance  # This is already corrected distance from robot front
-
-        # Check if clearance is within acceptable range (target ± tolerance)
-        if current_clearance > (self.TARGET_APPROACH_CLEARANCE + self.CLEARANCE_TOLERANCE):
-            # Too far, approach closer
-            approach_distance = current_clearance - self.TARGET_APPROACH_CLEARANCE
-            self.get_logger().info(f'Step 1: Approaching obstacle - moving {approach_distance:.2f}m (current: {current_clearance:.2f}m, target: {self.TARGET_APPROACH_CLEARANCE:.2f}m)')
-            self.move_distance(approach_distance, "approaching obstacle", skip_obstacle_avoidance=True)
-        elif current_clearance < (self.TARGET_APPROACH_CLEARANCE - self.CLEARANCE_TOLERANCE):
-            # Too close, back up to safe distance
-            backup_distance = (self.TARGET_APPROACH_CLEARANCE - current_clearance) + 0.05
-            self.get_logger().info(f'Step 1: Too close for safe avoidance - backing up {backup_distance:.2f}m')
-            self.move_distance(-backup_distance, "avoidance safety backup", skip_obstacle_avoidance=True)
-        else:
-            self.get_logger().info(f'Step 1: Clearance acceptable ({current_clearance:.2f}m ± {self.CLEARANCE_TOLERANCE:.2f}m), proceeding')
-
-
+    def navigate_around_obstacle_left(self, original_distance, approach_distance):
+        """Navigate around obstacle using LEFT side avoidance"""
+        self.get_logger().info('=== LEFT SIDE AVOIDANCE SEQUENCE ===')
         
         # Step 2: Turn 90° left
         self.get_logger().info('Step 2: Turning left 90°')
         self.turn_left_90_degrees()
         
         # Step 3: Move sideways to clear obstacle
-        sideways_distance = 0.3  # 50cm sideways
+        sideways_distance = 0.5  # 50cm sideways
         self.get_logger().info(f'Step 3: Moving sideways {sideways_distance:.2f}m')
         self.move_distance(sideways_distance, "moving sideways around obstacle")
         
@@ -570,7 +642,7 @@ class PIDStraightLineController(Node):
         self.turn_right_90_degrees()
         
         # Step 5: Move forward past obstacle
-        forward_distance = 0.5  # 80cm forward past obstacle
+        forward_distance = 0.8  # 80cm forward past obstacle
         self.get_logger().info(f'Step 5: Moving past obstacle {forward_distance:.2f}m')
         self.move_distance(forward_distance, "moving past obstacle")
         
@@ -587,8 +659,84 @@ class PIDStraightLineController(Node):
         self.get_logger().info('Step 8: Turning left 90° (back to original heading)')
         self.turn_left_90_degrees()
         
+        return forward_distance
+
+    def navigate_around_obstacle_right(self, original_distance, approach_distance):
+        """Navigate around obstacle using RIGHT side avoidance"""
+        self.get_logger().info('=== RIGHT SIDE AVOIDANCE SEQUENCE ===')
+        
+        # Step 2: Turn 90° right
+        self.get_logger().info('Step 2: Turning right 90°')
+        self.turn_right_90_degrees()
+        
+        # Step 3: Move sideways to clear obstacle
+        sideways_distance = 0.5  # 50cm sideways
+        self.get_logger().info(f'Step 3: Moving sideways {sideways_distance:.2f}m')
+        self.move_distance(sideways_distance, "moving sideways around obstacle")
+        
+        # Step 4: Turn 90° left (back to original heading) 
+        self.get_logger().info('Step 4: Turning left 90° (back to original heading)')
+        self.turn_left_90_degrees()
+        
+        # Step 5: Move forward past obstacle
+        forward_distance = 0.8  # 80cm forward past obstacle
+        self.get_logger().info(f'Step 5: Moving past obstacle {forward_distance:.2f}m')
+        self.move_distance(forward_distance, "moving past obstacle")
+        
+        # Step 6: Turn 90° left (toward original path)
+        self.get_logger().info('Step 6: Turning left 90° (toward original path)')
+        self.turn_left_90_degrees()
+        
+        # Step 7: Return to original path
+        return_distance = sideways_distance
+        self.get_logger().info(f'Step 7: Returning to path {return_distance:.2f}m')  
+        self.move_distance(return_distance, "returning to original path")
+        
+        # Step 8: Turn 90° right (back to original heading)
+        self.get_logger().info('Step 8: Turning right 90° (back to original heading)')
+        self.turn_right_90_degrees()
+        
+        return forward_distance
+
+    def navigate_around_obstacle(self, original_distance):
+        """Navigate around obstacle using intelligent side selection"""
+        self.get_logger().info(f'Obstacle detected - Robot front clearance: {self.obstacle_distance:.2f}m')
+        self.get_logger().info('=== OBSTACLE AVOIDANCE TRIGGERED ===')
+        self.get_logger().info(f'Actual robot front clearance: {self.obstacle_distance:.2f}m')
+        self.get_logger().info(f'Original planned distance: {original_distance:.2f}m')
+        self.get_logger().info(f'Current position: ({self.current_x:.2f}, {self.current_y:.2f})')
+
+        # Step 1: Approach obstacle closer (stop 10cm before robot front hits obstacle)
+        target_clearance = 0.10  # Want 10cm clearance from robot front to obstacle
+        current_clearance = self.obstacle_distance  # This is already corrected distance from robot front
+        approach_distance = 0.0
+
+        # Check if clearance is within acceptable range (target ± tolerance)
+        if current_clearance > (self.TARGET_APPROACH_CLEARANCE + self.CLEARANCE_TOLERANCE):
+            # Too far, approach closer
+            approach_distance = current_clearance - self.TARGET_APPROACH_CLEARANCE
+            self.get_logger().info(f'Step 1: Approaching obstacle - moving {approach_distance:.2f}m (current: {current_clearance:.2f}m, target: {self.TARGET_APPROACH_CLEARANCE:.2f}m)')
+            self.move_distance(approach_distance, "approaching obstacle", skip_obstacle_avoidance=True)
+        elif current_clearance < (self.TARGET_APPROACH_CLEARANCE - self.CLEARANCE_TOLERANCE):
+            # Too close, back up to safe distance
+            backup_distance = (self.TARGET_APPROACH_CLEARANCE - current_clearance) + 0.05
+            approach_distance = -backup_distance  # Negative for backing up
+            self.get_logger().info(f'Step 1: Too close for safe avoidance - backing up {backup_distance:.2f}m')
+            self.move_distance(-backup_distance, "avoidance safety backup", skip_obstacle_avoidance=True)
+        else:
+            self.get_logger().info(f'Step 1: Clearance acceptable ({current_clearance:.2f}m ± {self.CLEARANCE_TOLERANCE:.2f}m), proceeding')
+
+        # NEW: Determine best avoidance direction
+        avoidance_direction, side_clearance = self.choose_avoidance_direction()
+        
+        # Execute appropriate avoidance maneuver
+        if avoidance_direction == "left":
+            forward_distance = self.navigate_around_obstacle_left(original_distance, approach_distance)
+        else:  # right
+            forward_distance = self.navigate_around_obstacle_right(original_distance, approach_distance)
+        
         # Step 9: Continue with remaining distance
-        total_avoidance_forward = approach_distance + forward_distance
+        total_avoidance_forward = max(0, approach_distance) + forward_distance
         remaining_distance = original_distance - total_avoidance_forward
         if remaining_distance > 0.05:
             self.get_logger().info(f'Step 9: Completing remaining distance {remaining_distance:.2f}m')
@@ -597,7 +745,7 @@ class PIDStraightLineController(Node):
             self.get_logger().info('Step 9: No remaining distance to cover')
         
         self.get_logger().info('=== OBSTACLE AVOIDANCE COMPLETED ===')
-   
+    
     def calculate_room_width(self):
         """Calculate room width using LIDAR data"""
         if self.latest_scan is None:
@@ -960,9 +1108,9 @@ class PIDStraightLineController(Node):
                 self.turn_right_90_degrees()
                 time.sleep(0.5)
                 
-                self.get_logger().info('STEP 3: Offset movement')
-                self.move_distance(self.offset_distance, "offset movement")
-                time.sleep(0.5)
+                # self.get_logger().info('STEP 3: Offset movement')
+                # self.move_distance(self.offset_distance, "offset movement")
+                # time.sleep(0.5)
                 
                 self.get_logger().info('STEP 4: Right turn to face opposite direction')
                 self.turn_right_90_degrees()
@@ -973,9 +1121,9 @@ class PIDStraightLineController(Node):
                 self.turn_left_90_degrees()
                 time.sleep(0.5)
                 
-                self.get_logger().info('STEP 3: Offset movement')
-                self.move_distance(self.offset_distance, "offset movement")
-                time.sleep(0.5)
+                # self.get_logger().info('STEP 3: Offset movement')
+                # self.move_distance(self.offset_distance, "offset movement")
+                # time.sleep(0.5)
                 
                 self.get_logger().info('STEP 4: Left turn to face opposite direction')
                 self.turn_left_90_degrees()
