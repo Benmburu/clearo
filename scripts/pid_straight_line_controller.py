@@ -21,6 +21,8 @@ class PIDStraightLineController(Node):
         self.CLEARANCE_TOLERANCE = 0.02     # ±2cm tolerance
         self.TARGET_APPROACH_CLEARANCE = self.MINIMUM_SAFE_CLEARANCE + 0.05  # 20cm for approach
 
+        self.ROBOT_LENGTH = 0.304
+
         # Parameters
         self.declare_parameter('target_distance', 1.0)
         self.declare_parameter('forward_speed', 0.2)
@@ -624,26 +626,154 @@ class PIDStraightLineController(Node):
         
         return False, float('inf')
 
+    def measure_obstacle_width_from_front(self):
+        """Measure obstacle width when approaching from the front"""
+        if self.latest_scan is None:
+            return 0.3  # Default for unknown obstacles
+        
+        ranges = np.array(self.latest_scan.ranges)
+        angle_min = self.latest_scan.angle_min
+        angle_increment = self.latest_scan.angle_increment
+        
+        # Wider front sector for width measurement
+        front_sector = (-math.pi/4, math.pi/4)  # ±45° for better width detection
+        
+        obstacle_angles = []
+        obstacle_distances = []
+        
+        for i, range_val in enumerate(ranges):
+            angle = angle_min + i * angle_increment + math.pi
+            angle = self.normalize_angle(angle)
+            
+            if front_sector[0] <= angle <= front_sector[1]:
+                if self.latest_scan.range_min <= range_val <= 2.0:
+                    corrected_distance = range_val - (self.ROBOT_LENGTH / 2)
+                    if corrected_distance < (self.MINIMUM_SAFE_CLEARANCE + 0.3):  # Obstacle detection threshold
+                        obstacle_angles.append(angle)
+                        obstacle_distances.append(corrected_distance)
+        
+        if not obstacle_angles or len(obstacle_angles) < 3:  # Need at least 3 points for reliable measurement
+            self.get_logger().info('Insufficient points for width measurement, using default')
+            return 0.3
+        
+        # Find the angular span of the obstacle
+        angular_span = max(obstacle_angles) - min(obstacle_angles)
+        avg_distance = sum(obstacle_distances) / len(obstacle_distances)
+        
+        # Calculate width using arc length formula: width = distance × angular_span
+        estimated_width = avg_distance * angular_span
+        
+        # For cylindrical objects, we might see them as wider due to scanning angle
+        # Apply correction factor for typical cylindrical obstacles
+        corrected_width = estimated_width * 0.8  # Empirical correction
+        
+        self.get_logger().info(f'Width measurement from front:')
+        self.get_logger().info(f'  - Angular span: {math.degrees(angular_span):.1f}°')
+        self.get_logger().info(f'  - Average distance: {avg_distance:.2f}m')
+        self.get_logger().info(f'  - Raw width estimate: {estimated_width:.2f}m')
+        self.get_logger().info(f'  - Corrected width: {corrected_width:.2f}m')
+        self.get_logger().info(f'  - Scan points used: {len(obstacle_angles)}')
+        
+        return max(0.15, min(corrected_width, 0.8))  # Clamp between 15cm and 80cm
+    
+    def calculate_sideways_clearance(self, obstacle_width):
+        """Calculate required sideways clearance for differential drive robot"""
+        # For differential drive robot rotating on center axis:
+        # Need: robot_radius + obstacle_radius + safety_margin
+        
+        ROBOT_RADIUS = 0.178 / 2  # Half of robot width (turning radius)
+        obstacle_radius = obstacle_width / 2
+        SAFETY_MARGIN = 0.05  # 5cm safety margin
+        
+        required_clearance = ROBOT_RADIUS + obstacle_radius + SAFETY_MARGIN
+        
+        self.get_logger().info(f'Sideways clearance calculation:')
+        self.get_logger().info(f'  - Robot turning radius: {ROBOT_RADIUS:.2f}m')
+        self.get_logger().info(f'  - Obstacle radius: {obstacle_radius:.2f}m')
+        self.get_logger().info(f'  - Safety margin: {SAFETY_MARGIN:.2f}m')
+        self.get_logger().info(f'  - Total required clearance: {required_clearance:.2f}m')
+        
+        return max(0.2, min(required_clearance, 0.6))  # Clamp between 20cm and 60cm
+
+    def measure_obstacle_length_from_side(self):
+        """Measure obstacle length after turning 90° (now viewing from the side)"""
+        if self.latest_scan is None:
+            return 0.5
+        
+        ranges = np.array(self.latest_scan.ranges)
+        angle_min = self.latest_scan.angle_min
+        angle_increment = self.latest_scan.angle_increment
+        
+        # After turning 90°, the obstacle is now to our side
+        # Check the side where obstacle should be (±45° from perpendicular)
+        side_sector = (-math.pi/4, math.pi/4)  # ±45° from current forward direction
+        
+        obstacle_distances = []
+        obstacle_angles = []
+        
+        for i, range_val in enumerate(ranges):
+            angle = angle_min + i * angle_increment + math.pi
+            angle = self.normalize_angle(angle)
+            
+            if side_sector[0] <= angle <= side_sector[1]:
+                if self.latest_scan.range_min <= range_val <= 1.5:  # Closer range for side measurement
+                    obstacle_distances.append(range_val)
+                    obstacle_angles.append(angle)
+        
+        if not obstacle_distances: # or len(obstacle_distances) < 3:
+            self.get_logger().info('Insufficient side scan data, using default length')
+            return 0.5
+        
+        # Find the span of obstacle detection from the side
+        min_distance = min(obstacle_distances)
+        # filtered_distances = [d for d in obstacle_distances if d <= min_distance + 0.3]
+        filtered_distances = [d for d in obstacle_distances if d <= min_distance + 0.20]
+        filtered_angles = [obstacle_angles[i] for i, d in enumerate(obstacle_distances) if d <= min_distance + 0.3]
+
+        # Use only the angular span of the filtered (close) points
+        angular_span = max(filtered_angles) - min(filtered_angles) if len(filtered_angles) > 1 else 0.1
+        avg_distance = sum(filtered_distances) / len(filtered_distances)
+
+        self.get_logger().info(f'  - Min distance: {min_distance:.2f}m, Max filtered: {max(filtered_distances):.2f}m')
+        self.get_logger().info(f'  - Filtered angular span: {math.degrees(angular_span):.1f}°')
+
+        # Calculate length: for cylindrical object, length ≈ distance × angular_span
+        estimated_length = avg_distance * angular_span        
+        
+        # Add safety margins: obstacle length + robot length + buffer
+        safe_forward_distance = estimated_length + 0.304 + 0.2  # robot length + buffer
+        
+        self.get_logger().info(f'Length measurement from side:')
+        self.get_logger().info(f'  - Side angular span: {math.degrees(angular_span):.1f}°')
+        self.get_logger().info(f'  - Average side distance: {avg_distance:.2f}m')
+        self.get_logger().info(f'  - Estimated length: {estimated_length:.2f}m')
+        self.get_logger().info(f'  - Safe forward distance: {safe_forward_distance:.2f}m')
+        self.get_logger().info(f'  - Total scan points: {len(obstacle_distances)}, Filtered: {len(filtered_distances)}')        
+        return max(0.4, min(safe_forward_distance, 1.2))  # Clamp between 40cm and 1.2m
+
     def navigate_around_obstacle_left(self, original_distance, approach_distance):
-        """Navigate around obstacle using LEFT side avoidance"""
+        """Navigate around obstacle using LEFT side avoidance with smart measurements"""
         self.get_logger().info('=== LEFT SIDE AVOIDANCE SEQUENCE ===')
+        
+        # Step 1: Measure obstacle width from front (before turning)
+        obstacle_width = self.measure_obstacle_width_from_front()
+        sideways_distance = self.calculate_sideways_clearance(obstacle_width)
         
         # Step 2: Turn 90° left
         self.get_logger().info('Step 2: Turning left 90°')
         self.turn_left_90_degrees()
         
         # Step 3: Move sideways to clear obstacle
-        sideways_distance = 0.5  # 50cm sideways
-        self.get_logger().info(f'Step 3: Moving sideways {sideways_distance:.2f}m')
+        self.get_logger().info(f'Step 3: Moving sideways {sideways_distance:.2f}m (calculated from width)')
         self.move_distance(sideways_distance, "moving sideways around obstacle")
         
         # Step 4: Turn 90° right (back to original heading) 
         self.get_logger().info('Step 4: Turning right 90° (back to original heading)')
         self.turn_right_90_degrees()
         
-        # Step 5: Move forward past obstacle
-        forward_distance = 0.8  # 80cm forward past obstacle
-        self.get_logger().info(f'Step 5: Moving past obstacle {forward_distance:.2f}m')
+        # Step 5: Measure obstacle length from side (after turning)
+        forward_distance = self.measure_obstacle_length_from_side()
+        self.get_logger().info(f'Step 5: Moving past obstacle {forward_distance:.2f}m (calculated from length)')
         self.move_distance(forward_distance, "moving past obstacle")
         
         # Step 6: Turn 90° right (toward original path)
@@ -662,25 +792,28 @@ class PIDStraightLineController(Node):
         return forward_distance
 
     def navigate_around_obstacle_right(self, original_distance, approach_distance):
-        """Navigate around obstacle using RIGHT side avoidance"""
+        """Navigate around obstacle using RIGHT side avoidance with smart measurements"""
         self.get_logger().info('=== RIGHT SIDE AVOIDANCE SEQUENCE ===')
+        
+        # Step 1: Measure obstacle width from front (before turning)
+        obstacle_width = self.measure_obstacle_width_from_front()
+        sideways_distance = self.calculate_sideways_clearance(obstacle_width)
         
         # Step 2: Turn 90° right
         self.get_logger().info('Step 2: Turning right 90°')
         self.turn_right_90_degrees()
         
         # Step 3: Move sideways to clear obstacle
-        sideways_distance = 0.5  # 50cm sideways
-        self.get_logger().info(f'Step 3: Moving sideways {sideways_distance:.2f}m')
+        self.get_logger().info(f'Step 3: Moving sideways {sideways_distance:.2f}m (calculated from width)')
         self.move_distance(sideways_distance, "moving sideways around obstacle")
         
         # Step 4: Turn 90° left (back to original heading) 
         self.get_logger().info('Step 4: Turning left 90° (back to original heading)')
         self.turn_left_90_degrees()
         
-        # Step 5: Move forward past obstacle
-        forward_distance = 0.8  # 80cm forward past obstacle
-        self.get_logger().info(f'Step 5: Moving past obstacle {forward_distance:.2f}m')
+        # Step 5: Measure obstacle length from side (after turning)
+        forward_distance = self.measure_obstacle_length_from_side()
+        self.get_logger().info(f'Step 5: Moving past obstacle {forward_distance:.2f}m (calculated from length)')
         self.move_distance(forward_distance, "moving past obstacle")
         
         # Step 6: Turn 90° left (toward original path)
@@ -697,7 +830,7 @@ class PIDStraightLineController(Node):
         self.turn_right_90_degrees()
         
         return forward_distance
-
+    
     def navigate_around_obstacle(self, original_distance):
         """Navigate around obstacle using intelligent side selection"""
         self.get_logger().info(f'Obstacle detected - Robot front clearance: {self.obstacle_distance:.2f}m')
@@ -745,7 +878,7 @@ class PIDStraightLineController(Node):
             self.get_logger().info('Step 9: No remaining distance to cover')
         
         self.get_logger().info('=== OBSTACLE AVOIDANCE COMPLETED ===')
-    
+
     def calculate_room_width(self):
         """Calculate room width using LIDAR data"""
         if self.latest_scan is None:
