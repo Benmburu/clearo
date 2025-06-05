@@ -11,6 +11,7 @@ import psutil
 import time
 import os
 import socket
+from ament_index_python.packages import get_package_share_directory
 
 class RobotWebInterface(Node):
     def __init__(self):
@@ -20,8 +21,33 @@ class RobotWebInterface(Node):
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.status_pub = self.create_publisher(String, '/robot_status', 10)
         
+        # Get the correct template folder path
+        try:
+            package_share_directory = get_package_share_directory('clearo')
+            template_folder = os.path.join(package_share_directory, 'web', 'templates')
+        except:
+            # Fallback to relative path for development
+            template_folder = os.path.join(os.path.dirname(__file__), '..', 'web', 'templates')
+        
+        # Check if template folder exists
+        if not os.path.exists(template_folder):
+            self.get_logger().error(f'Template folder not found: {template_folder}')
+            # Try alternative paths
+            alt_paths = [
+                os.path.join(os.path.dirname(__file__), 'web', 'templates'),
+                os.path.join(os.path.dirname(__file__), '..', '..', 'src', 'clearo', 'web', 'templates'),
+                '/home/ubuntu/Documents/clearo_ws/src/clearo/web/templates'
+            ]
+            for alt_path in alt_paths:
+                if os.path.exists(alt_path):
+                    template_folder = alt_path
+                    self.get_logger().info(f'Using template folder: {template_folder}')
+                    break
+            else:
+                self.get_logger().error('Could not find template folder anywhere!')
+        
         # Flask app
-        self.app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), '..', 'web', 'templates'))
+        self.app = Flask(__name__, template_folder=template_folder)
         self.setup_routes()
         
         # Robot status
@@ -34,6 +60,7 @@ class RobotWebInterface(Node):
         # Get Pi IP address for display
         self.pi_ip = self.get_pi_ip()
         self.get_logger().info(f'Web interface will be available at: http://{self.pi_ip}:5000')
+        self.get_logger().info(f'Template folder: {template_folder}')
         
     def setup_routes(self):
         @self.app.route('/')
