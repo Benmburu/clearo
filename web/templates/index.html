@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clearo Robot Control</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            border-radius: 15px;
+            transition: all 0.3s ease;
+        }
+        
+        .status-ready {
+            background: rgba(76, 175, 80, 0.3);
+            border: 2px solid #4CAF50;
+        }
+        
+        .status-not-ready {
+            background: rgba(244, 67, 54, 0.3);
+            border: 2px solid #F44336;
+        }
+        
+        .status-dot {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin-right: 15px;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-ready .status-dot {
+            background: #4CAF50;
+        }
+        
+        .status-not-ready .status-dot {
+            background: #F44336;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .control-section {
+            margin-bottom: 30px;
+            padding: 25px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        h1, h2 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        button {
+            padding: 15px 25px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: linear-gradient(45deg, #FF6B6B, #4ECDC4);
+            color: white;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .stop-btn {
+            background: linear-gradient(45deg, #FF4757, #FF3838) !important;
+        }
+        
+        .distance-input {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        
+        input[type="number"] {
+            padding: 10px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 16px;
+            width: 100px;
+        }
+        
+        input[type="number"]::placeholder {
+            color: rgba(255, 255, 255, 0.7);
+        }
+        
+        .manual-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            max-width: 300px;
+            margin: 20px auto;
+        }
+        
+        .manual-controls button {
+            padding: 20px;
+            font-size: 18px;
+        }
+        
+        #status-log {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Clearo Robot Control Panel</h1>
+        
+        <div id="status-indicator" class="status-indicator status-not-ready">
+            <div class="status-dot"></div>
+            <span id="status-text">Checking robot status...</span>
+        </div>
+        
+        <div class="control-section">
+            <h2>Autonomous Movement</h2>
+            <div class="distance-input">
+                <label>Distance (meters):</label>
+                <input type="number" id="distance" value="1.0" min="0.1" max="10" step="0.1">
+            </div>
+            <div class="button-grid">
+                <button onclick="startStraightLine()">🚀 Start Straight Line</button>
+                <button class="stop-btn" onclick="stopRobot()">🛑 Emergency Stop</button>
+            </div>
+        </div>
+        
+        <div class="control-section">
+            <h2>Manual Control</h2>
+            <div class="manual-controls">
+                <div></div>
+                <button onmousedown="manualMove(0.5, 0)" onmouseup="stopManual()">⬆️</button>
+                <div></div>
+                <button onmousedown="manualMove(0, 0.5)" onmouseup="stopManual()">⬅️</button>
+                <button onmousedown="manualMove(-0.5, 0)" onmouseup="stopManual()">⬇️</button>
+                <button onmousedown="manualMove(0, -0.5)" onmouseup="stopManual()">➡️</button>
+            </div>
+        </div>
+        
+        <div class="control-section">
+            <h2>Status Log</h2>
+            <div id="status-log"></div>
+        </div>
+    </div>
+
+    <script>
+        let statusInterval;
+        
+        function updateStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    const indicator = document.getElementById('status-indicator');
+                    const statusText = document.getElementById('status-text');
+                    
+                    if (data.ready) {
+                        indicator.className = 'status-indicator status-ready';
+                        statusText.textContent = `Robot Ready - ${data.nodes_running.length} nodes running`;
+                    } else {
+                        indicator.className = 'status-indicator status-not-ready';
+                        statusText.textContent = 'Robot Starting Up...';
+                    }
+                    
+                    logStatus(`Status: ${data.ready ? 'Ready' : 'Not Ready'} - Nodes: ${data.nodes_running.length}`);
+                })
+                .catch(error => {
+                    console.error('Status check failed:', error);
+                    logStatus('Status check failed');
+                });
+        }
+        
+        function startStraightLine() {
+            const distance = document.getElementById('distance').value;
+            
+            fetch('/api/move', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'straight_line', distance: parseFloat(distance)})
+            })
+            .then(response => response.json())
+            .then(data => {
+                logStatus(`Started straight line movement: ${distance}m`);
+            })
+            .catch(error => {
+                logStatus('Failed to start movement');
+            });
+        }
+        
+        function stopRobot() {
+            fetch('/api/move', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'stop'})
+            })
+            .then(response => response.json())
+            .then(data => {
+                logStatus('Robot stopped');
+            });
+        }
+        
+        function manualMove(linear, angular) {
+            fetch('/api/manual_control', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({linear_x: linear, angular_z: angular})
+            });
+        }
+        
+        function stopManual() {
+            manualMove(0, 0);
+        }
+        
+        function logStatus(message) {
+            const log = document.getElementById('status-log');
+            const timestamp = new Date().toLocaleTimeString();
+            log.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        // Start status updates
+        updateStatus();
+        statusInterval = setInterval(updateStatus, 2000);
+    </script>
+</body>
+</html>

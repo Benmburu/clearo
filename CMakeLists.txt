@@ -38,6 +38,7 @@ install(PROGRAMS
   scripts/pid_controller_visual.py
   scripts/mpu6050_node.py
   scripts/calibrate_mpu6050.py
+  scripts/robot_web_server.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -21,6 +21,7 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <depend>python3-smbus</depend>
+  <exec_depend>python3-flask</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
